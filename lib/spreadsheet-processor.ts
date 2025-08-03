@@ -149,9 +149,8 @@ export async function processSpreadsheet(
       })
 
       if (jsonData.length === 0) {
-        console.log(`Sheet "${sheetName}": ${columns.length} valid columns (from ${headers.length} total), ${dataRows.length} rows`)
-
-      sheetsMetadata.push({
+        console.log(`Sheet "${sheetName}": Empty sheet`)
+        sheetsMetadata.push({
           name: sheetName,
           index,
           columns: [],
@@ -183,6 +182,8 @@ export async function processSpreadsheet(
         metadata.letter = getColumnLetter(colIndex) // Use original column index for letter
         columns.push(metadata)
       })
+
+      console.log(`Sheet "${sheetName}": ${columns.length} valid columns (from ${headers.length} total), ${dataRows.length} rows`)
 
       sheetsMetadata.push({
         name: sheetName,
