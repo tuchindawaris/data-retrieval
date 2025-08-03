@@ -80,6 +80,57 @@ const FILE_GROUPS = {
   }
 }
 
+interface FolderNode {
+  id: string
+  name: string
+  path: string
+  files: FileMetadata[]
+  subfolders: FolderNode[]
+  isExpanded: boolean
+}
+
+function buildFolderTree(files: FileMetadata[]): FolderNode[] {
+  const folderMap = new Map<string, FolderNode>()
+  const rootFolders: FolderNode[] = []
+  
+  // First pass: create all folders
+  files.forEach(file => {
+    if (file.metadata?.isFolder) {
+      const node: FolderNode = {
+        id: file.file_id,
+        name: file.name,
+        path: file.folder_path,
+        files: [],
+        subfolders: [],
+        isExpanded: false
+      }
+      folderMap.set(file.file_id, node)
+    }
+  })
+  
+  // Second pass: build hierarchy and add files
+  files.forEach(file => {
+    if (file.metadata?.isFolder) {
+      const node = folderMap.get(file.file_id)!
+      const parentId = file.metadata.parentFolderId
+      
+      if (parentId && folderMap.has(parentId)) {
+        folderMap.get(parentId)!.subfolders.push(node)
+      } else {
+        rootFolders.push(node)
+      }
+    } else {
+      // Regular file - add to parent folder
+      const parentId = file.metadata?.parentFolderId
+      if (parentId && folderMap.has(parentId)) {
+        folderMap.get(parentId)!.files.push(file)
+      }
+    }
+  })
+  
+  return rootFolders
+}
+
 function getFileGroup(mimeType: string, fileName: string) {
   const extension = fileName.split('.').pop()?.toLowerCase() || ''
   
@@ -99,6 +150,8 @@ export default function KnowledgeMapPage() {
   const [indexing, setIndexing] = useState(false)
   const [driveToken, setDriveToken] = useState<string | null>(null)
   const [folderUrl, setFolderUrl] = useState('')
+  const [deletingFolder, setDeletingFolder] = useState<string | null>(null)
+  const [clearingAll, setClearingAll] = useState(false)
   
   // SQL data
   const [tables, setTables] = useState<Map<string, Set<string>>>(new Map())
@@ -107,7 +160,8 @@ export default function KnowledgeMapPage() {
   // Drive data
   const [files, setFiles] = useState<FileMetadata[]>([])
   const [driveSource, setDriveSource] = useState<DataSource | null>(null)
-  const [groupedFiles, setGroupedFiles] = useState<Record<string, FileMetadata[]>>({})
+  const [folderTree, setFolderTree] = useState<FolderNode[]>([])
+  const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set())
 
   useEffect(() => {
     loadData()
@@ -115,16 +169,9 @@ export default function KnowledgeMapPage() {
   }, [])
 
   useEffect(() => {
-    // Group files when they change
-    const grouped: Record<string, FileMetadata[]> = {}
-    files.forEach(file => {
-      const group = getFileGroup(file.mime_type, file.name)
-      if (!grouped[group.key]) {
-        grouped[group.key] = []
-      }
-      grouped[group.key].push(file)
-    })
-    setGroupedFiles(grouped)
+    // Build folder tree when files change
+    const tree = buildFolderTree(files)
+    setFolderTree(tree)
   }, [files])
 
   async function checkAuth() {
@@ -171,7 +218,33 @@ export default function KnowledgeMapPage() {
   }
 
   async function handleResync() {
+    if (activeTab === 'drive' && folderTree.length > 0) {
+      if (!confirm('Resync all folders with the latest files from Google Drive?')) {
+        return
+      }
+    }
+    
     setSyncing(true)
+    
+    if (activeTab === 'drive' && driveToken) {
+      // Resync all root folders
+      try {
+        for (const folder of folderTree) {
+          const response = await fetch('/api/drive/index', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ folderId: folder.id }),
+          })
+          
+          if (!response.ok) {
+            console.error(`Failed to resync folder: ${folder.name}`)
+          }
+        }
+      } catch (error) {
+        console.error('Error resyncing folders:', error)
+      }
+    }
+    
     await loadData()
     setSyncing(false)
   }
@@ -183,10 +256,21 @@ export default function KnowledgeMapPage() {
   async function indexDriveFolder() {
     if (!folderUrl || !driveToken) return
     
-    setIndexing(true)
-    
     const match = folderUrl.match(/\/folders\/([a-zA-Z0-9-_]+)/)
     const folderId = match ? match[1] : 'root'
+    
+    // Check if folder already exists locally
+    const existingFolder = files.find(f => 
+      f.file_id === folderId && f.metadata?.isFolder
+    )
+    
+    if (existingFolder) {
+      if (!confirm('This folder is already indexed. Would you like to resync it with the latest files from Google Drive?')) {
+        return
+      }
+    }
+    
+    setIndexing(true)
     
     try {
       const response = await fetch('/api/drive/index', {
@@ -195,9 +279,14 @@ export default function KnowledgeMapPage() {
         body: JSON.stringify({ folderId }),
       })
       
+      const data = await response.json()
+      
       if (response.ok) {
         await loadData()
         setFolderUrl('')
+        if (data.resynced) {
+          alert(`Folder resynced successfully! Updated ${data.indexed} files.`)
+        }
       } else {
         alert('Failed to index folder')
       }
@@ -208,6 +297,179 @@ export default function KnowledgeMapPage() {
     }
   }
 
+  async function deleteFolder(folderId: string) {
+    if (!confirm('Are you sure you want to remove this folder and all its contents from the app?')) {
+      return
+    }
+    
+    setDeletingFolder(folderId)
+    
+    try {
+      const response = await fetch('/api/drive/index', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ folderId }),
+      })
+      
+      if (response.ok) {
+        await loadData()
+      } else {
+        alert('Failed to delete folder')
+      }
+    } catch (error) {
+      alert('Error deleting folder')
+    } finally {
+      setDeletingFolder(null)
+    }
+  }
+
+  async function clearAllImports() {
+    if (!confirm('Are you sure you want to clear ALL imported files? This cannot be undone.')) {
+      return
+    }
+    
+    setClearingAll(true)
+    
+    try {
+      const response = await fetch('/api/drive/index', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ clearAll: true }),
+      })
+      
+      if (response.ok) {
+        await loadData()
+      } else {
+        alert('Failed to clear imports')
+      }
+    } catch (error) {
+      alert('Error clearing imports')
+    } finally {
+      setClearingAll(false)
+    }
+  }
+
+  function toggleFolder(folderId: string) {
+    setExpandedFolders(prev => {
+      const next = new Set(prev)
+      if (next.has(folderId)) {
+        next.delete(folderId)
+      } else {
+        next.add(folderId)
+      }
+      return next
+    })
+  }
+
+  async function resyncFolder(folderId: string, folderName: string) {
+    if (!confirm(`Resync "${folderName}" with the latest files from Google Drive?`)) {
+      return
+    }
+    
+    setSyncing(true)
+    
+    try {
+      const response = await fetch('/api/drive/index', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ folderId }),
+      })
+      
+      const data = await response.json()
+      
+      if (response.ok) {
+        await loadData()
+        if (data.resynced) {
+          alert(`Folder resynced successfully! Updated ${data.indexed} files.`)
+        }
+      } else {
+        alert('Failed to resync folder')
+      }
+    } catch (error) {
+      alert('Error resyncing folder')
+    } finally {
+      setSyncing(false)
+    }
+  }
+
+  function renderFolderNode(node: FolderNode, level: number = 0) {
+    const isExpanded = expandedFolders.has(node.id)
+    
+    return (
+      <div key={node.id} className="mb-2">
+        <div 
+          className="flex items-center gap-2 p-2 hover:bg-gray-100 rounded cursor-pointer"
+          style={{ paddingLeft: `${level * 20 + 8}px` }}
+        >
+          <button 
+            onClick={() => toggleFolder(node.id)}
+            className="text-gray-500 hover:text-gray-700"
+          >
+            {isExpanded ? '▼' : '▶'}
+          </button>
+          
+          <svg className="w-5 h-5 text-yellow-600" fill="currentColor" viewBox="0 0 20 20">
+            <path d="M2 6a2 2 0 012-2h5l2 2h5a2 2 0 012 2v6a2 2 0 01-2 2H4a2 2 0 01-2-2V6z" />
+          </svg>
+          
+          <span className="font-medium flex-1">{node.name}</span>
+          
+          <div className="flex items-center gap-2">
+            <button
+              onClick={(e) => {
+                e.stopPropagation()
+                resyncFolder(node.id, node.name)
+              }}
+              disabled={syncing}
+              className="text-blue-600 hover:text-blue-800 text-sm px-2 py-1"
+            >
+              Resync
+            </button>
+            
+            <button
+              onClick={(e) => {
+                e.stopPropagation()
+                deleteFolder(node.id)
+              }}
+              disabled={deletingFolder === node.id}
+              className="text-red-600 hover:text-red-800 text-sm px-2 py-1"
+            >
+              {deletingFolder === node.id ? 'Deleting...' : 'Delete'}
+            </button>
+          </div>
+        </div>
+        
+        {isExpanded && (
+          <div>
+            {/* Subfolders */}
+            {node.subfolders.map(subfolder => renderFolderNode(subfolder, level + 1))}
+            
+            {/* Files */}
+            {node.files.map(file => {
+              const group = getFileGroup(file.mime_type, file.name)
+              return (
+                <div
+                  key={file.id}
+                  className="flex items-center gap-2 p-2 hover:bg-gray-50 rounded"
+                  style={{ paddingLeft: `${(level + 1) * 20 + 28}px` }}
+                >
+                  <div
+                    className="w-3 h-3 rounded-sm"
+                    style={{ backgroundColor: group.color }}
+                  />
+                  <span className="text-sm text-gray-700">{file.name}</span>
+                  <span className="text-xs text-gray-500 ml-auto">
+                    {(file.size / 1024).toFixed(1)} KB
+                  </span>
+                </div>
+              )
+            })}
+          </div>
+        )}
+      </div>
+    )
+  }
+
   return (
     <div className="min-h-screen bg-gray-50">
       <header className="bg-white shadow-sm border-b">
@@ -216,6 +478,16 @@ export default function KnowledgeMapPage() {
             <h1 className="text-xl font-semibold">Knowledge Map</h1>
             
             <div className="flex items-center gap-4">
+              {activeTab === 'drive' && driveToken && files.length > 0 && (
+                <button
+                  onClick={clearAllImports}
+                  disabled={clearingAll}
+                  className="bg-red-600 hover:bg-red-700 disabled:bg-gray-400 text-white px-4 py-2 rounded-md text-sm font-medium transition-colors"
+                >
+                  {clearingAll ? 'Clearing...' : 'Clear All Imports'}
+                </button>
+              )}
+              
               {activeTab === 'drive' && !driveToken && (
                 <button
                   onClick={linkGoogleDrive}
@@ -229,8 +501,9 @@ export default function KnowledgeMapPage() {
                 onClick={handleResync}
                 disabled={syncing}
                 className="bg-gray-600 hover:bg-gray-700 disabled:bg-gray-400 text-white px-4 py-2 rounded-md text-sm transition-colors"
+                title={activeTab === 'drive' ? 'Resync all folders with Google Drive' : 'Reload data'}
               >
-                {syncing ? 'Syncing...' : 'Resync'}
+                {syncing ? 'Syncing...' : activeTab === 'drive' && folderTree.length > 0 ? 'Resync All' : 'Refresh'}
               </button>
             </div>
           </div>
@@ -324,43 +597,38 @@ export default function KnowledgeMapPage() {
                   </div>
                 )}
 
-                {/* File Groups */}
-                {Object.entries(FILE_GROUPS).map(([groupKey, group]) => {
-                  const groupFiles = groupedFiles[groupKey] || []
-                  if (groupFiles.length === 0) return null
-
-                  return (
-                    <div key={groupKey} className="mb-8">
-                      <div className="flex items-center mb-3">
-                        <div
-                          className="w-4 h-4 rounded mr-2"
-                          style={{ backgroundColor: group.color }}
-                        />
-                        <h3 className="font-medium text-gray-900">
-                          {group.label} ({groupFiles.length})
-                        </h3>
+                {/* Folder Tree */}
+                {(folderTree.length > 0 || files.some(f => !f.metadata?.isFolder)) ? (
+                  <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
+                    <h3 className="font-medium text-gray-900 mb-4">Imported Folders</h3>
+                    {folderTree.map(node => renderFolderNode(node))}
+                    
+                    {/* Files not in any folder */}
+                    {files.filter(f => !f.metadata?.isFolder && !f.metadata?.parentFolderId).length > 0 && (
+                      <div className="mt-4 pt-4 border-t">
+                        <h4 className="text-sm font-medium text-gray-700 mb-2">Loose Files</h4>
+                        {files.filter(f => !f.metadata?.isFolder && !f.metadata?.parentFolderId).map(file => {
+                          const group = getFileGroup(file.mime_type, file.name)
+                          return (
+                            <div
+                              key={file.id}
+                              className="flex items-center gap-2 p-2 hover:bg-gray-50 rounded"
+                            >
+                              <div
+                                className="w-3 h-3 rounded-sm"
+                                style={{ backgroundColor: group.color }}
+                              />
+                              <span className="text-sm text-gray-700">{file.name}</span>
+                              <span className="text-xs text-gray-500 ml-auto">
+                                {(file.size / 1024).toFixed(1)} KB
+                              </span>
+                            </div>
+                          )
+                        })}
                       </div>
-                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
-                        {groupFiles.map(file => (
-                          <div
-                            key={file.id}
-                            className="bg-white rounded-lg shadow-sm border p-3"
-                            style={{ borderColor: group.color }}
-                          >
-                            <p className="text-sm font-medium text-gray-900 truncate">
-                              {file.name}
-                            </p>
-                            <p className="text-xs text-gray-500 mt-1">
-                              {(file.size / 1024).toFixed(1)} KB
-                            </p>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )
-                })}
-
-                {files.length === 0 && (
+                    )}
+                  </div>
+                ) : (
                   <div className="text-center py-12 text-gray-500">
                     {driveToken ? 'No files indexed yet' : 'Please link your Google Drive'}
                   </div>
