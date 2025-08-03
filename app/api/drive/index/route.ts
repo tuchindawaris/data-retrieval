@@ -2,6 +2,42 @@ import { NextRequest, NextResponse } from 'next/server'
 import { listFolderContents, getFileMetadata } from '@/lib/google-drive'
 import { supabaseAdmin } from '@/lib/supabase'
 import { cookies } from 'next/headers'
+import { processSpreadsheet } from '@/lib/spreadsheet-processor'
+import { extractDocumentText } from '@/lib/document-processor'
+
+// Check if file is a spreadsheet
+function isSpreadsheet(mimeType: string, fileName: string): boolean {
+  const spreadsheetMimeTypes = [
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    'application/vnd.ms-excel',
+    'text/csv',
+    'application/vnd.google-apps.spreadsheet',
+    'application/vnd.oasis.opendocument.spreadsheet'
+  ]
+  
+  const extension = fileName.split('.').pop()?.toLowerCase() || ''
+  const spreadsheetExtensions = ['xlsx', 'xls', 'csv', 'ods']
+  
+  return spreadsheetMimeTypes.includes(mimeType) || spreadsheetExtensions.includes(extension)
+}
+
+// Check if file is a document
+function isDocument(mimeType: string, fileName: string): boolean {
+  const documentMimeTypes = [
+    'text/plain',
+    'text/markdown',
+    'application/msword',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    'application/vnd.google-apps.document',
+    'application/rtf',
+    'application/vnd.oasis.opendocument.text'
+  ]
+  
+  const extension = fileName.split('.').pop()?.toLowerCase() || ''
+  const documentExtensions = ['txt', 'md', 'doc', 'docx', 'rtf', 'odt']
+  
+  return documentMimeTypes.includes(mimeType) || documentExtensions.includes(extension)
+}
 
 async function indexFolderRecursive(
   accessToken: string, 
@@ -28,6 +64,35 @@ async function indexFolderRecursive(
       fileRecords.push(...subRecords)
     }
     
+    // Process spreadsheets to extract column metadata
+    let fileMetadata: any = {
+      modifiedTime: file.modifiedTime,
+      parents: file.parents,
+      isFolder: file.mimeType === 'application/vnd.google-apps.folder',
+      parentFolderId: folderId,
+    }
+    
+    if (!fileMetadata.isFolder && isSpreadsheet(file.mimeType!, file.name!)) {
+      try {
+        console.log(`Processing spreadsheet: ${file.name} (${file.id})`)
+        const sheetsMetadata = await processSpreadsheet(
+          accessToken,
+          file.id!,
+          file.name!,
+          file.mimeType!
+        )
+        
+        fileMetadata.isSpreadsheet = true
+        fileMetadata.sheets = sheetsMetadata
+        fileMetadata.processedAt = new Date().toISOString()
+      } catch (error: any) {
+        console.error(`Error processing spreadsheet ${file.name}:`, error)
+        fileMetadata.spreadsheetError = error.message || String(error)
+      }
+    } else if (!fileMetadata.isFolder && isDocument(file.mimeType!, file.name!)) {
+      fileMetadata.isDocument = true
+    }
+    
     // Add all files (including folders) to records
     fileRecords.push({
       source_id: sourceId,
@@ -36,12 +101,7 @@ async function indexFolderRecursive(
       mime_type: file.mimeType!,
       size: parseInt(file.size || '0'),
       folder_path: currentPath,
-      metadata: {
-        modifiedTime: file.modifiedTime,
-        parents: file.parents,
-        isFolder: file.mimeType === 'application/vnd.google-apps.folder',
-        parentFolderId: folderId,
-      },
+      metadata: fileMetadata,
     })
   }
   
@@ -50,7 +110,7 @@ async function indexFolderRecursive(
 
 export async function POST(request: NextRequest) {
   try {
-    const { folderId } = await request.json()
+    const { folderId, generateSummaries = false } = await request.json()
     
     // Get tokens from cookie
     const cookieStore = cookies()
@@ -142,10 +202,38 @@ export async function POST(request: NextRequest) {
           .upsert(fileRecords, { onConflict: 'source_id,file_id' })
       }
       
+      // Generate summaries if requested
+      let summaryCount = 0
+      if (generateSummaries) {
+        try {
+          // Make internal API call with proper headers
+          const baseUrl = request.nextUrl.origin
+          const summaryResponse = await fetch(
+            `${baseUrl}/api/drive/generate-summaries`,
+            {
+              method: 'POST',
+              headers: { 
+                'Content-Type': 'application/json',
+                'Cookie': request.headers.get('cookie') || ''
+              },
+              body: JSON.stringify({ folderId })
+            }
+          )
+          
+          if (summaryResponse.ok) {
+            const summaryData = await summaryResponse.json()
+            summaryCount = summaryData.updated || 0
+          }
+        } catch (error) {
+          console.error('Error generating summaries:', error)
+        }
+      }
+      
       return NextResponse.json({ 
         success: true,
         resynced: true,
-        indexed: fileRecords.length 
+        indexed: fileRecords.length,
+        summariesGenerated: summaryCount
       })
     }
     
@@ -185,9 +273,35 @@ export async function POST(request: NextRequest) {
         .upsert(fileRecords, { onConflict: 'source_id,file_id' })
     }
     
+    // Generate summaries if requested
+    let summaryCount = 0
+    if (generateSummaries) {
+      try {
+        const summaryResponse = await fetch(
+          `${process.env.NEXT_PUBLIC_SITE_URL || 'http://localhost:3000'}/api/drive/generate-summaries`,
+          {
+            method: 'POST',
+            headers: { 
+              'Content-Type': 'application/json',
+              'Cookie': request.headers.get('cookie') || ''
+            },
+            body: JSON.stringify({ folderId })
+          }
+        )
+        
+        if (summaryResponse.ok) {
+          const summaryData = await summaryResponse.json()
+          summaryCount = summaryData.updated || 0
+        }
+      } catch (error) {
+        console.error('Error generating summaries:', error)
+      }
+    }
+    
     return NextResponse.json({ 
       success: true, 
-      indexed: fileRecords.length 
+      indexed: fileRecords.length,
+      summariesGenerated: summaryCount 
     })
     
   } catch (error) {

@@ -152,6 +152,7 @@ export default function KnowledgeMapPage() {
   const [folderUrl, setFolderUrl] = useState('')
   const [deletingFolder, setDeletingFolder] = useState<string | null>(null)
   const [clearingAll, setClearingAll] = useState(false)
+  const [generateSummariesOnIndex, setGenerateSummariesOnIndex] = useState(false)
   
   // SQL data
   const [tables, setTables] = useState<Map<string, Set<string>>>(new Map())
@@ -162,6 +163,8 @@ export default function KnowledgeMapPage() {
   const [driveSource, setDriveSource] = useState<DataSource | null>(null)
   const [folderTree, setFolderTree] = useState<FolderNode[]>([])
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set())
+  const [expandedSpreadsheets, setExpandedSpreadsheets] = useState<Set<string>>(new Set())
+  const [generatingSummaries, setGeneratingSummaries] = useState(false)
 
   useEffect(() => {
     loadData()
@@ -276,7 +279,10 @@ export default function KnowledgeMapPage() {
       const response = await fetch('/api/drive/index', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ folderId }),
+        body: JSON.stringify({ 
+          folderId,
+          generateSummaries: generateSummariesOnIndex 
+        }),
       })
       
       const data = await response.json()
@@ -284,9 +290,16 @@ export default function KnowledgeMapPage() {
       if (response.ok) {
         await loadData()
         setFolderUrl('')
-        if (data.resynced) {
-          alert(`Folder resynced successfully! Updated ${data.indexed} files.`)
+        
+        let message = `Folder indexed successfully!\n`
+        message += `- Files indexed: ${data.indexed}\n`
+        
+        if (generateSummariesOnIndex && data.summariesGenerated !== undefined) {
+          message += `- Summaries generated: ${data.summariesGenerated}`
         }
+        
+        alert(message)
+        console.log('Folder indexing complete:', data)
       } else {
         alert('Failed to index folder')
       }
@@ -361,6 +374,18 @@ export default function KnowledgeMapPage() {
     })
   }
 
+  function toggleSpreadsheet(fileId: string) {
+    setExpandedSpreadsheets(prev => {
+      const next = new Set(prev)
+      if (next.has(fileId)) {
+        next.delete(fileId)
+      } else {
+        next.add(fileId)
+      }
+      return next
+    })
+  }
+
   async function resyncFolder(folderId: string, folderName: string) {
     if (!confirm(`Resync "${folderName}" with the latest files from Google Drive?`)) {
       return
@@ -372,15 +397,38 @@ export default function KnowledgeMapPage() {
       const response = await fetch('/api/drive/index', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ folderId }),
+        body: JSON.stringify({ 
+          folderId,
+          generateSummaries: generateSummariesOnIndex 
+        }),
       })
       
       const data = await response.json()
       
       if (response.ok) {
         await loadData()
+        
         if (data.resynced) {
-          alert(`Folder resynced successfully! Updated ${data.indexed} files.`)
+          let message = `Folder resynced successfully!\n`
+          message += `- Files updated: ${data.indexed}\n`
+          
+          if (data.summariesGenerated !== undefined && data.summariesGenerated > 0) {
+            message += `- Summaries generated: ${data.summariesGenerated}`
+          }
+          
+          alert(message)
+          console.log('Folder resync complete:', data)
+        } else {
+          // This is a new folder indexing
+          let message = `Folder indexed successfully!\n`
+          message += `- Files indexed: ${data.indexed}\n`
+          
+          if (generateSummariesOnIndex && data.summariesGenerated !== undefined) {
+            message += `- Summaries generated: ${data.summariesGenerated}`
+          }
+          
+          alert(message)
+          console.log('New folder indexing complete:', data)
         }
       } else {
         alert('Failed to resync folder')
@@ -389,6 +437,47 @@ export default function KnowledgeMapPage() {
       alert('Error resyncing folder')
     } finally {
       setSyncing(false)
+    }
+  }
+
+  async function generateSummariesForFiles() {
+    if (!confirm('Generate AI summaries for all files? This will use your OpenAI API quota.')) {
+      return
+    }
+    
+    setGeneratingSummaries(true)
+    console.log('Starting AI summary generation...')
+    
+    try {
+      const response = await fetch('/api/drive/generate-summaries', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}), // Process all files
+      })
+      
+      const data = await response.json()
+      
+      if (response.ok) {
+        await loadData()
+        let message = `Successfully generated summaries!\n`
+        message += `- Processed: ${data.processed} files\n`
+        message += `- Updated: ${data.updated} files\n`
+        message += `- Failed: ${data.failed} files\n`
+        message += `- Skipped: ${data.skipped} files\n`
+        message += `- Tokens used: ${data.tokensUsed || 0}\n`
+        message += `- Duration: ${(data.duration / 1000).toFixed(1)}s`
+        
+        alert(message)
+        console.log('Summary generation complete:', data)
+      } else {
+        alert(`Failed to generate summaries: ${data.error || 'Unknown error'}`)
+        console.error('Summary generation failed:', data)
+      }
+    } catch (error) {
+      alert('Error generating summaries')
+      console.error('Error:', error)
+    } finally {
+      setGeneratingSummaries(false)
     }
   }
 
@@ -447,20 +536,95 @@ export default function KnowledgeMapPage() {
             {/* Files */}
             {node.files.map(file => {
               const group = getFileGroup(file.mime_type, file.name)
+              const isSpreadsheet = file.metadata?.isSpreadsheet
+              const isExpandedSpreadsheet = expandedSpreadsheets.has(file.file_id)
+              
               return (
-                <div
-                  key={file.id}
-                  className="flex items-center gap-2 p-2 hover:bg-gray-50 rounded"
-                  style={{ paddingLeft: `${(level + 1) * 20 + 28}px` }}
-                >
+                <div key={file.id}>
                   <div
-                    className="w-3 h-3 rounded-sm"
-                    style={{ backgroundColor: group.color }}
-                  />
-                  <span className="text-sm text-gray-700">{file.name}</span>
-                  <span className="text-xs text-gray-500 ml-auto">
-                    {(file.size / 1024).toFixed(1)} KB
-                  </span>
+                    className={`flex items-center gap-2 p-2 hover:bg-gray-50 rounded ${isSpreadsheet ? 'cursor-pointer' : ''}`}
+                    style={{ paddingLeft: `${(level + 1) * 20 + 28}px` }}
+                    onClick={() => isSpreadsheet && toggleSpreadsheet(file.file_id)}
+                  >
+                    {isSpreadsheet && (
+                      <button className="text-gray-500 hover:text-gray-700 text-xs">
+                        {isExpandedSpreadsheet ? '▼' : '▶'}
+                      </button>
+                    )}
+                    <div
+                      className="w-3 h-3 rounded-sm"
+                      style={{ backgroundColor: group.color }}
+                    />
+                    <span className="text-sm text-gray-700">{file.name}</span>
+                    {isSpreadsheet && file.metadata?.sheets && (
+                      <span className="text-xs text-gray-500">
+                        ({file.metadata.sheets.length} sheets)
+                      </span>
+                    )}
+                    {file.metadata?.summary && (
+                      <span className="text-xs text-gray-600 italic ml-2" title={file.metadata.summary}>
+                        "{file.metadata.summary.length > 60 ? file.metadata.summary.substring(0, 60) + '...' : file.metadata.summary}"
+                      </span>
+                    )}
+                    {file.metadata?.summaryStatus === 'failed' && (
+                      <span className="text-xs text-red-600 ml-2" title={file.metadata.summaryError}>
+                        ⚠️ Summary failed
+                      </span>
+                    )}
+                    <span className="text-xs text-gray-500 ml-auto">
+                      {(file.size / 1024).toFixed(1)} KB
+                    </span>
+                  </div>
+                  
+                  {/* Spreadsheet sheets */}
+                  {isSpreadsheet && isExpandedSpreadsheet && file.metadata?.sheets && (
+                    <div style={{ paddingLeft: `${(level + 2) * 20 + 28}px` }}>
+                      {file.metadata.sheets.map((sheet: any, sheetIndex: number) => (
+                        <div key={sheetIndex} className="mb-2">
+                          <div className="flex items-center gap-2 p-1 text-xs text-gray-600">
+                            <svg className="w-4 h-4 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 17V7m0 10a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2h2a2 2 0 012 2m0 10a2 2 0 002 2h2a2 2 0 002-2M9 7a2 2 0 012-2h2a2 2 0 012 2m0 10V7m0 10a2 2 0 002 2h2a2 2 0 002-2V7a2 2 0 00-2-2h-2a2 2 0 00-2 2" />
+                            </svg>
+                            <span className="font-medium">{sheet.name}</span>
+                            <span className="text-gray-500">
+                              ({(sheet.columns?.filter((c: any) => c)?.length || 0)} cols, {sheet.totalRows || 0} rows)
+                            </span>
+                          </div>
+                          
+                          {/* Sheet summary */}
+                          {sheet.summary && (
+                            <div className="ml-6 text-xs text-gray-600 italic">
+                              "{sheet.summary}"
+                            </div>
+                          )}
+                          {sheet.summaryStatus === 'missing' && (
+                            <div className="ml-6 text-xs text-orange-600">
+                              ⚠️ Summary missing for this sheet
+                            </div>
+                          )}
+                          
+                          {/* Column details */}
+                          {sheet.columns && sheet.columns.length > 0 && (
+                            <div className="ml-6 mt-1 text-xs">
+                              <div className="grid grid-cols-4 gap-2 text-gray-500">
+                                {sheet.columns.filter((col: any) => col).slice(0, 8).map((col: any, colIndex: number) => (
+                                  <div key={colIndex} className="truncate">
+                                    <span className="font-mono text-gray-400">{col.letter || `Col${colIndex + 1}`}:</span> {col.name || 'Unnamed'}
+                                    <span className="text-gray-400"> ({col.dataType || 'unknown'})</span>
+                                  </div>
+                                ))}
+                              </div>
+                              {sheet.columns.filter((col: any) => col).length > 8 && (
+                                <div className="text-gray-400 mt-1">
+                                  ... and {sheet.columns.filter((col: any) => col).length - 8} more columns
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               )
             })}
@@ -479,13 +643,23 @@ export default function KnowledgeMapPage() {
             
             <div className="flex items-center gap-4">
               {activeTab === 'drive' && driveToken && files.length > 0 && (
-                <button
-                  onClick={clearAllImports}
-                  disabled={clearingAll}
-                  className="bg-red-600 hover:bg-red-700 disabled:bg-gray-400 text-white px-4 py-2 rounded-md text-sm font-medium transition-colors"
-                >
-                  {clearingAll ? 'Clearing...' : 'Clear All Imports'}
-                </button>
+                <>
+                  <button
+                    onClick={generateSummariesForFiles}
+                    disabled={generatingSummaries}
+                    className="bg-purple-600 hover:bg-purple-700 disabled:bg-gray-400 text-white px-4 py-2 rounded-md text-sm font-medium transition-colors"
+                  >
+                    {generatingSummaries ? 'Generating...' : 'Generate AI Summaries'}
+                  </button>
+                  
+                  <button
+                    onClick={clearAllImports}
+                    disabled={clearingAll}
+                    className="bg-red-600 hover:bg-red-700 disabled:bg-gray-400 text-white px-4 py-2 rounded-md text-sm font-medium transition-colors"
+                  >
+                    {clearingAll ? 'Clearing...' : 'Clear All Imports'}
+                  </button>
+                </>
               )}
               
               {activeTab === 'drive' && !driveToken && (
@@ -579,21 +753,32 @@ export default function KnowledgeMapPage() {
             {activeTab === 'drive' && (
               <div>
                 {driveToken && (
-                  <div className="mb-6 flex gap-2">
-                    <input
-                      type="text"
-                      placeholder="Google Drive folder URL"
-                      value={folderUrl}
-                      onChange={(e) => setFolderUrl(e.target.value)}
-                      className="flex-1 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    />
-                    <button
-                      onClick={indexDriveFolder}
-                      disabled={!folderUrl || indexing}
-                      className="bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 text-white px-4 py-2 rounded-md transition-colors"
-                    >
-                      {indexing ? 'Indexing...' : 'Index Folder'}
-                    </button>
+                  <div className="mb-6">
+                    <div className="flex gap-2 mb-2">
+                      <input
+                        type="text"
+                        placeholder="Google Drive folder URL"
+                        value={folderUrl}
+                        onChange={(e) => setFolderUrl(e.target.value)}
+                        className="flex-1 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      />
+                      <button
+                        onClick={indexDriveFolder}
+                        disabled={!folderUrl || indexing}
+                        className="bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 text-white px-4 py-2 rounded-md transition-colors"
+                      >
+                        {indexing ? 'Indexing...' : 'Index Folder'}
+                      </button>
+                    </div>
+                    <label className="flex items-center gap-2 text-sm text-gray-600">
+                      <input
+                        type="checkbox"
+                        checked={generateSummariesOnIndex}
+                        onChange={(e) => setGenerateSummariesOnIndex(e.target.checked)}
+                        className="rounded border-gray-300"
+                      />
+                      Generate AI summaries during indexing (uses OpenAI API)
+                    </label>
                   </div>
                 )}
 
