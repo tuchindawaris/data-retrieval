@@ -1,8 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { createRouteHandlerClient } from '@supabase/auth-helpers-nextjs'
-import { cookies } from 'next/headers'
 import { getTokenFromCode } from '@/lib/google-drive'
-import { saveUserGoogleTokens } from '@/lib/google-tokens'
 
 export async function GET(request: NextRequest) {
   const searchParams = request.nextUrl.searchParams
@@ -14,25 +11,22 @@ export async function GET(request: NextRequest) {
   }
   
   try {
-    // Get current user
-    const supabase = createRouteHandlerClient({ cookies })
-    const { data: { session } } = await supabase.auth.getSession()
-    
-    if (!session) {
-      console.error('No active session in callback')
-      return NextResponse.redirect(new URL('/login', request.nextUrl.origin))
-    }
-    
     // Exchange code for tokens
     const tokens = await getTokenFromCode(code)
     console.log('Got tokens:', { access_token: !!tokens.access_token, refresh_token: !!tokens.refresh_token })
     
-    // Save tokens to database
-    await saveUserGoogleTokens(session.user.id, tokens)
-    console.log('Tokens saved successfully')
+    // Store tokens in cookies (NOT tied to Supabase user)
+    const response = NextResponse.redirect(new URL('/knowledge-map', request.nextUrl.origin))
+    response.cookies.set('google_tokens', JSON.stringify(tokens), {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax',
+      maxAge: 60 * 60 * 24 * 7, // 7 days
+    })
     
-    // Always redirect to knowledge-map
-    return NextResponse.redirect(new URL('/knowledge-map', request.nextUrl.origin))
+    console.log('Tokens saved to cookies successfully')
+    
+    return response
   } catch (error) {
     console.error('OAuth callback error:', error)
     // Even on error, redirect to knowledge-map

@@ -2,8 +2,8 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createRouteHandlerClient } from '@supabase/auth-helpers-nextjs'
 import { cookies } from 'next/headers'
 import { listFolderContents, getFileMetadata } from '@/lib/google-drive'
-import { getUserGoogleTokens, getUserDriveSource } from '@/lib/google-tokens'
 import { processSpreadsheet } from '@/lib/spreadsheet-processor'
+import { getOAuth2Client } from '@/lib/google-drive'
 
 // Check if file is a spreadsheet
 function isSpreadsheet(mimeType: string, fileName: string): boolean {
@@ -108,30 +108,158 @@ async function indexFolderRecursive(
   return fileRecords
 }
 
-export async function POST(request: NextRequest) {
-  try {
-    const supabase = createRouteHandlerClient({ cookies })
-    const { data: { session } } = await supabase.auth.getSession()
+async function refreshTokenIfNeeded(tokens: any, cookieStore: any) {
+  if (tokens.expiry_date && Date.now() >= tokens.expiry_date) {
+    console.log('Access token expired, attempting to refresh...')
     
-    if (!session) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    if (tokens.refresh_token) {
+      const oauth2Client = getOAuth2Client()
+      oauth2Client.setCredentials(tokens)
+      
+      try {
+        const { credentials } = await oauth2Client.refreshAccessToken()
+        
+        // Update stored tokens
+        cookieStore.set('google_tokens', JSON.stringify(credentials), {
+          httpOnly: true,
+          secure: process.env.NODE_ENV === 'production',
+          sameSite: 'lax',
+          maxAge: 60 * 60 * 24 * 7, // 7 days
+        })
+        
+        console.log('Successfully refreshed Google access token')
+        return credentials.access_token
+      } catch (error) {
+        console.error('Failed to refresh token:', error)
+        throw new Error('Failed to refresh Google token')
+      }
+    } else {
+      throw new Error('No refresh token available')
     }
+  }
+  
+  return tokens.access_token
+}
+
+export async function POST(request: NextRequest) {
+  console.log('\n=== DRIVE INDEX REQUEST ===')
+  
+  try {
+    // Debug: Log all cookies
+    const cookieStore = cookies()
+    const allCookies = cookieStore.getAll()
+    console.log('All cookies:', allCookies.map(c => ({ name: c.name, hasValue: !!c.value })))
+    
+    // Check Supabase session - try multiple approaches
+    console.log('Checking Supabase session...')
+    
+    // Method 1: Using createRouteHandlerClient
+    const supabase = createRouteHandlerClient({ cookies })
+    const { data: { session }, error: sessionError } = await supabase.auth.getSession()
+    
+    if (sessionError) {
+      console.error('Supabase session error:', sessionError)
+    }
+    
+    // Method 2: Try to get user directly
+    const { data: { user }, error: userError } = await supabase.auth.getUser()
+    
+    if (userError) {
+      console.error('Supabase user error:', userError)
+    }
+    
+    // Use session or user, whichever is available
+    const currentUser = session?.user || user
+    
+    if (!currentUser) {
+      console.error('No Supabase session or user found')
+      console.log('Session:', session)
+      console.log('User:', user)
+      
+      // Check for specific Supabase cookies
+      const sbAccessToken = cookieStore.get('sb-access-token')
+      const sbRefreshToken = cookieStore.get('sb-refresh-token')
+      console.log('Supabase cookies present:', {
+        'sb-access-token': !!sbAccessToken,
+        'sb-refresh-token': !!sbRefreshToken
+      })
+      
+      return NextResponse.json({ 
+        error: 'No Supabase session - please log in',
+        debug: {
+          hasSession: false,
+          hasUser: false,
+          cookies: allCookies.map(c => c.name)
+        }
+      }, { status: 401 })
+    }
+    
+    console.log(`Supabase user found: ${currentUser.email}`)
     
     const { folderId, generateSummaries = false } = await request.json()
+    console.log(`Folder ID: ${folderId}, Generate summaries: ${generateSummaries}`)
     
-    // Get Google tokens
-    const tokens = await getUserGoogleTokens()
-    if (!tokens) {
-      return NextResponse.json({ error: 'Not authenticated with Google Drive' }, { status: 401 })
+    // Get Google tokens from cookies
+    console.log('Checking Google tokens...')
+    const tokensCookie = cookieStore.get('google_tokens')
+    
+    if (!tokensCookie) {
+      console.error('No Google tokens cookie found')
+      return NextResponse.json({ error: 'Not authenticated with Google Drive - please link Google Drive first' }, { status: 401 })
     }
     
-    // Get or create Drive source
-    const source = await getUserDriveSource(session.user.id)
-    if (!source) {
-      return NextResponse.json({ error: 'Failed to get Drive source' }, { status: 500 })
+    let tokens
+    try {
+      tokens = JSON.parse(tokensCookie.value)
+      console.log('Google tokens found, checking expiry...')
+    } catch (e) {
+      console.error('Failed to parse Google tokens:', e)
+      return NextResponse.json({ error: 'Invalid Google tokens - please re-link Google Drive' }, { status: 401 })
     }
     
-    const sourceId = source.id
+    // Refresh token if needed
+    let accessToken
+    try {
+      accessToken = await refreshTokenIfNeeded(tokens, cookieStore)
+      console.log('Google access token is valid')
+    } catch (error: any) {
+      console.error('Token refresh failed:', error)
+      return NextResponse.json({ error: 'Google token refresh failed - please re-link Google Drive', details: error.message }, { status: 401 })
+    }
+    
+    // Get or create Drive source for the Supabase user
+    console.log('Getting Drive source for user...')
+    const { data: source, error: sourceError } = await supabase
+      .from('data_sources')
+      .select('*')
+      .eq('user_id', currentUser.id)
+      .eq('type', 'drive')
+      .single()
+    
+    let sourceId = source?.id
+    
+    if (!sourceId) {
+      console.log('Creating new Drive source...')
+      const { data: newSource, error } = await supabase
+        .from('data_sources')
+        .insert({ 
+          user_id: currentUser.id,
+          name: 'Google Drive',
+          type: 'drive'
+        })
+        .select()
+        .single()
+      
+      if (error) {
+        console.error('Error creating Drive source:', error)
+        return NextResponse.json({ error: 'Failed to create Drive source', details: error.message }, { status: 500 })
+      }
+      
+      sourceId = newSource?.id
+      console.log('Created new Drive source:', sourceId)
+    } else {
+      console.log('Using existing Drive source:', sourceId)
+    }
     
     // Check if folder already indexed
     const { data: existingFiles } = await supabase
@@ -143,6 +271,7 @@ export async function POST(request: NextRequest) {
       .limit(1)
     
     if (existingFiles && existingFiles.length > 0) {
+      console.log('Folder already indexed, performing resync...')
       // Folder exists - do a resync
       // First, delete all existing files for this folder
       const { data: allFiles } = await supabase
@@ -158,6 +287,7 @@ export async function POST(request: NextRequest) {
       ) || []
       
       if (filesToDelete.length > 0) {
+        console.log(`Deleting ${filesToDelete.length} existing files...`)
         const idsToDelete = filesToDelete.map(f => f.id)
         await supabase
           .from('file_metadata')
@@ -167,15 +297,17 @@ export async function POST(request: NextRequest) {
     }
     
     // Index folder recursively
+    console.log('Starting folder indexing...')
     const fileRecords = await indexFolderRecursive(
-      tokens.access_token,
+      accessToken,
       folderId,
       folderId,
       sourceId
     )
     
     // Get folder metadata for the root folder
-    const folderMeta = await getFileMetadata(tokens.access_token, folderId)
+    console.log('Getting root folder metadata...')
+    const folderMeta = await getFileMetadata(accessToken, folderId)
     
     // Add the root folder
     fileRecords.unshift({
@@ -193,15 +325,23 @@ export async function POST(request: NextRequest) {
       },
     })
     
+    console.log(`Indexed ${fileRecords.length} files, saving to database...`)
+    
     if (fileRecords.length > 0) {
-      await supabase
+      const { error: upsertError } = await supabase
         .from('file_metadata')
         .upsert(fileRecords, { onConflict: 'source_id,file_id' })
+      
+      if (upsertError) {
+        console.error('Error saving files to database:', upsertError)
+        return NextResponse.json({ error: 'Failed to save indexed files', details: upsertError.message }, { status: 500 })
+      }
     }
     
     // Generate summaries if requested
     let summaryCount = 0
     if (generateSummaries) {
+      console.log('Generating summaries...')
       try {
         const baseUrl = request.nextUrl.origin
         const summaryResponse = await fetch(
@@ -219,6 +359,9 @@ export async function POST(request: NextRequest) {
         if (summaryResponse.ok) {
           const summaryData = await summaryResponse.json()
           summaryCount = summaryData.updated || 0
+          console.log(`Generated ${summaryCount} summaries`)
+        } else {
+          console.error('Summary generation failed:', await summaryResponse.text())
         }
       } catch (error) {
         console.error('Error generating summaries:', error)
@@ -227,6 +370,9 @@ export async function POST(request: NextRequest) {
     
     const resynced = existingFiles && existingFiles.length > 0
     
+    console.log('=== INDEX COMPLETE ===')
+    console.log(`Success! Indexed ${fileRecords.length} files, generated ${summaryCount} summaries`)
+    
     return NextResponse.json({ 
       success: true,
       resynced,
@@ -234,10 +380,12 @@ export async function POST(request: NextRequest) {
       summariesGenerated: summaryCount
     })
     
-  } catch (error) {
+  } catch (error: any) {
+    console.error('=== INDEX ERROR ===')
     console.error('Indexing error:', error)
+    console.error('Stack:', error.stack)
     return NextResponse.json(
-      { error: 'Failed to index folder' }, 
+      { error: 'Failed to index folder', details: error.message }, 
       { status: 500 }
     )
   }
@@ -246,16 +394,26 @@ export async function POST(request: NextRequest) {
 export async function DELETE(request: NextRequest) {
   try {
     const supabase = createRouteHandlerClient({ cookies })
-    const { data: { session } } = await supabase.auth.getSession()
     
-    if (!session) {
+    // Try both getSession and getUser
+    const { data: { session } } = await supabase.auth.getSession()
+    const { data: { user } } = await supabase.auth.getUser()
+    const currentUser = session?.user || user
+    
+    if (!currentUser) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
     
     const { folderId, clearAll } = await request.json()
     
     // Get Drive source
-    const source = await getUserDriveSource(session.user.id)
+    const { data: source } = await supabase
+      .from('data_sources')
+      .select('*')
+      .eq('user_id', currentUser.id)
+      .eq('type', 'drive')
+      .single()
+    
     if (!source) {
       return NextResponse.json({ error: 'No drive source found' }, { status: 404 })
     }

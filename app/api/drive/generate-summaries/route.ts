@@ -3,7 +3,7 @@ import { createRouteHandlerClient } from '@supabase/auth-helpers-nextjs'
 import { cookies } from 'next/headers'
 import { generateSummaries } from '@/lib/summary-generator'
 import { extractDocumentText } from '@/lib/document-processor'
-import { getUserGoogleTokens, getUserDriveSource } from '@/lib/google-tokens'
+import { getOAuth2Client } from '@/lib/google-drive'
 
 const DOCUMENT_MIME_TYPES = [
   'text/plain',
@@ -14,6 +14,38 @@ const DOCUMENT_MIME_TYPES = [
   'application/rtf',
   'application/vnd.oasis.opendocument.text'
 ]
+
+async function refreshTokenIfNeeded(tokens: any, cookieStore: any) {
+  if (tokens.expiry_date && Date.now() >= tokens.expiry_date) {
+    console.log('Access token expired, attempting to refresh...')
+    
+    if (tokens.refresh_token) {
+      const oauth2Client = getOAuth2Client()
+      oauth2Client.setCredentials(tokens)
+      
+      try {
+        const { credentials } = await oauth2Client.refreshAccessToken()
+        
+        // Update stored tokens
+        cookieStore.set('google_tokens', JSON.stringify(credentials), {
+          httpOnly: true,
+          secure: process.env.NODE_ENV === 'production',
+          sameSite: 'lax',
+          maxAge: 60 * 60 * 24 * 7, // 7 days
+        })
+        
+        return credentials.access_token
+      } catch (error) {
+        console.error('Failed to refresh token:', error)
+        throw new Error('Failed to refresh Google token')
+      }
+    } else {
+      throw new Error('No refresh token available')
+    }
+  }
+  
+  return tokens.access_token
+}
 
 export async function POST(request: NextRequest) {
   const startTime = Date.now()
@@ -40,17 +72,25 @@ export async function POST(request: NextRequest) {
     const { folderId } = await request.json()
     console.log(`Folder ID: ${folderId || 'ALL FILES'}`)
     
-    // Get tokens
-    const tokens = await getUserGoogleTokens()
-    if (!tokens) {
+    // Get tokens from cookies
+    const cookieStore = cookies()
+    const tokensCookie = cookieStore.get('google_tokens')
+    if (!tokensCookie) {
       console.error('✗ No Google auth tokens found')
       return NextResponse.json({ error: 'Not authenticated with Google Drive' }, { status: 401 })
     }
     
-    const accessToken = tokens.access_token
+    const tokens = JSON.parse(tokensCookie.value)
+    const accessToken = await refreshTokenIfNeeded(tokens, cookieStore)
     
     // Get user's Drive source
-    const source = await getUserDriveSource(session.user.id)
+    const { data: source } = await supabase
+      .from('data_sources')
+      .select('*')
+      .eq('user_id', session.user.id)
+      .eq('type', 'drive')
+      .single()
+    
     if (!source) {
       return NextResponse.json({ error: 'No Drive source found' }, { status: 404 })
     }

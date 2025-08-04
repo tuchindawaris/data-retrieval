@@ -179,7 +179,9 @@ export default function KnowledgeMapPage() {
   }, [files])
 
   async function checkAuth() {
-    const res = await fetch('/api/auth/check')
+    const res = await fetch('/api/auth/check', {
+      credentials: 'include' // IMPORTANT: Include cookies
+    })
     const data = await res.json()
     setHasGoogleAuth(data.authenticated)
   }
@@ -247,6 +249,7 @@ export default function KnowledgeMapPage() {
         const response = await fetch('/api/drive/index', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
+          credentials: 'include', // IMPORTANT: Include cookies
           body: JSON.stringify({ folderId: folder.id }),
         })
         
@@ -289,6 +292,7 @@ export default function KnowledgeMapPage() {
       const response = await fetch('/api/drive/index', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'include', // IMPORTANT: Include cookies
         body: JSON.stringify({ 
           folderId,
           generateSummaries: generateSummariesOnIndex 
@@ -311,10 +315,12 @@ export default function KnowledgeMapPage() {
         alert(message)
         console.log('Folder indexing complete:', data)
       } else {
-        alert('Failed to index folder')
+        alert(`Failed to index folder: ${data.error || 'Unknown error'}`)
+        console.error('Index error:', data)
       }
     } catch (error) {
       alert('Error indexing folder')
+      console.error('Error:', error)
     } finally {
       setIndexing(false)
     }
@@ -331,6 +337,7 @@ export default function KnowledgeMapPage() {
       const response = await fetch('/api/drive/index', {
         method: 'DELETE',
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'include', // IMPORTANT: Include cookies
         body: JSON.stringify({ folderId }),
       })
       
@@ -357,6 +364,7 @@ export default function KnowledgeMapPage() {
       const response = await fetch('/api/drive/index', {
         method: 'DELETE',
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'include', // IMPORTANT: Include cookies
         body: JSON.stringify({ clearAll: true }),
       })
       
@@ -407,6 +415,7 @@ export default function KnowledgeMapPage() {
       const response = await fetch('/api/drive/index', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'include', // IMPORTANT: Include cookies
         body: JSON.stringify({ 
           folderId,
           generateSummaries: generateSummariesOnIndex 
@@ -449,6 +458,7 @@ export default function KnowledgeMapPage() {
       const response = await fetch('/api/drive/generate-summaries', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'include', // IMPORTANT: Include cookies
         body: JSON.stringify({}), // Process all files
       })
       
