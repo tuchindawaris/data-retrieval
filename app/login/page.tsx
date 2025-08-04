@@ -4,17 +4,22 @@ import { useState, useEffect } from 'react'
 import { useAuth } from '@/contexts/AuthContext'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
+import { supabase } from '@/lib/supabase'
 
 export default function LoginPage() {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
-  const [success, setSuccess] = useState(false)
   const { signIn, user } = useAuth()
   const router = useRouter()
 
   useEffect(() => {
+    // Debug: Check if Supabase is initialized
+    console.log('Supabase client:', supabase)
+    console.log('Supabase URL:', process.env.NEXT_PUBLIC_SUPABASE_URL)
+    console.log('Current user:', user)
+    
     // Redirect if already logged in
     if (user) {
       router.push('/')
@@ -23,18 +28,18 @@ export default function LoginPage() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
+    console.log('Form submitted with:', { email, password: '***' })
     setError('')
     setLoading(true)
     
     try {
+      console.log('Calling signIn...')
       await signIn(email, password)
-      setSuccess(true)
-      // Manual redirect after successful login
-      setTimeout(() => {
-        router.push('/')
-      }, 100)
+      console.log('SignIn completed successfully')
     } catch (err: any) {
+      console.error('SignIn error:', err)
       setError(err.message || 'Failed to sign in')
+    } finally {
       setLoading(false)
     }
   }
@@ -54,11 +59,6 @@ export default function LoginPage() {
           {error && (
             <div className="bg-red-50 border border-red-200 text-red-600 p-3 rounded-md text-sm">
               {error}
-            </div>
-          )}
-          {success && (
-            <div className="bg-green-50 border border-green-200 text-green-600 p-3 rounded-md text-sm">
-              Login successful! Redirecting...
             </div>
           )}
           <div className="space-y-4">

@@ -263,8 +263,9 @@ export default function KnowledgeMapPage() {
   }
 
   async function linkGoogleDrive() {
-    window.location.href = '/api/auth/google'
+  window.location.href = '/api/auth/google'
   }
+
 
   async function indexDriveFolder() {
     if (!folderUrl || !hasGoogleAuth) return

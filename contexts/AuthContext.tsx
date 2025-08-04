@@ -22,20 +22,33 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     // Check active session
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setUser(session?.user ?? null)
-      setLoading(false)
-    })
+    const checkSession = async () => {
+      try {
+        const { data: { session } } = await supabase.auth.getSession()
+        setUser(session?.user ?? null)
+      } catch (error) {
+        console.error('Error checking session:', error)
+      } finally {
+        setLoading(false)
+      }
+    }
+
+    checkSession()
 
     // Listen for auth changes
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
       setUser(session?.user ?? null)
       
       // Handle navigation based on auth state
       if (event === 'SIGNED_IN') {
-        router.push('/')
+        // Give session time to propagate before redirecting
+        setTimeout(() => {
+          router.push('/')
+          router.refresh() // Force a refresh to update server components
+        }, 500)
       } else if (event === 'SIGNED_OUT') {
         router.push('/login')
+        router.refresh()
       }
     })
 
@@ -45,8 +58,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const signIn = async (email: string, password: string) => {
     const { data, error } = await supabase.auth.signInWithPassword({ email, password })
     if (error) throw error
-    // The onAuthStateChange listener will handle navigation
-    return data
+    // Don't handle navigation here - let onAuthStateChange handle it
   }
 
   const signUp = async (email: string, password: string) => {
@@ -55,12 +67,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     // For development, auto-confirm and sign in
     // In production, you'd send a confirmation email
     await signIn(email, password)
-    return data
   }
 
   const signOut = async () => {
     await supabase.auth.signOut()
-    router.push('/login')
+    // Navigation will be handled by onAuthStateChange
   }
 
   return (
