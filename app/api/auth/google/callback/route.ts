@@ -10,7 +10,7 @@ export async function GET(request: NextRequest) {
   
   if (!code) {
     console.error('No authorization code received')
-    return NextResponse.redirect(new URL('/', request.url))
+    return NextResponse.redirect(new URL('/knowledge-map', request.nextUrl.origin))
   }
   
   try {
@@ -20,7 +20,7 @@ export async function GET(request: NextRequest) {
     
     if (!session) {
       console.error('No active session in callback')
-      return NextResponse.redirect(new URL('/login', request.url))
+      return NextResponse.redirect(new URL('/login', request.nextUrl.origin))
     }
     
     // Exchange code for tokens
@@ -31,9 +31,11 @@ export async function GET(request: NextRequest) {
     await saveUserGoogleTokens(session.user.id, tokens)
     console.log('Tokens saved successfully')
     
-    return NextResponse.redirect(new URL('/', request.url))
+    // Always redirect to knowledge-map
+    return NextResponse.redirect(new URL('/knowledge-map', request.nextUrl.origin))
   } catch (error) {
     console.error('OAuth callback error:', error)
-    return NextResponse.redirect(new URL('/', request.url))
+    // Even on error, redirect to knowledge-map
+    return NextResponse.redirect(new URL('/knowledge-map', request.nextUrl.origin))
   }
 }

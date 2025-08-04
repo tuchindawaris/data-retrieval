@@ -36,6 +36,8 @@ export default function LoginPage() {
       console.log('Calling signIn...')
       await signIn(email, password)
       console.log('SignIn completed successfully')
+      // Navigate after successful login
+      router.push('/')
     } catch (err: any) {
       console.error('SignIn error:', err)
       setError(err.message || 'Failed to sign in')
