@@ -14,7 +14,7 @@ export default function Home() {
             Query your data with natural language
           </p>
           
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 max-w-4xl mx-auto">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6 max-w-5xl mx-auto">
             <Link
               href="/knowledge-map"
               className="bg-white rounded-lg shadow-lg p-8 hover:shadow-xl transition-shadow"
@@ -27,6 +27,21 @@ export default function Home() {
               <h2 className="text-2xl font-semibold mb-2">Knowledge Map</h2>
               <p className="text-gray-600">
                 View and manage your connected data sources
+              </p>
+            </Link>
+            
+            <Link
+              href="/knowledgemapschema"
+              className="bg-white rounded-lg shadow-lg p-8 hover:shadow-xl transition-shadow"
+            >
+              <div className="text-purple-600 mb-4">
+                <svg className="w-12 h-12 mx-auto" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4m0 5c0 2.21-3.582 4-8 4s-8-1.79-8-4" />
+                </svg>
+              </div>
+              <h2 className="text-2xl font-semibold mb-2">Schema Viewer</h2>
+              <p className="text-gray-600">
+                View JSON schemas for Drive and Database
               </p>
             </Link>
             
