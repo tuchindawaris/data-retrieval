@@ -2,7 +2,8 @@
 
 import { useEffect, useState } from 'react'
 import { supabase } from '@/lib/supabase'
-import type { DataSource, FileMetadata, SchemaMetadata } from '@/lib/supabase'
+import { useAuth } from '@/contexts/AuthContext'
+import type { DataSource, FileMetadata } from '@/lib/supabase'
 
 // File type groupings for uniform parsing
 const FILE_GROUPS = {
@@ -144,19 +145,16 @@ function getFileGroup(mimeType: string, fileName: string) {
 }
 
 export default function KnowledgeMapPage() {
+  const { user, signOut } = useAuth()
   const [activeTab, setActiveTab] = useState<'sql' | 'drive'>('drive')
   const [loading, setLoading] = useState(true)
   const [syncing, setSyncing] = useState(false)
   const [indexing, setIndexing] = useState(false)
-  const [driveToken, setDriveToken] = useState<string | null>(null)
+  const [hasGoogleAuth, setHasGoogleAuth] = useState(false)
   const [folderUrl, setFolderUrl] = useState('')
   const [deletingFolder, setDeletingFolder] = useState<string | null>(null)
   const [clearingAll, setClearingAll] = useState(false)
   const [generateSummariesOnIndex, setGenerateSummariesOnIndex] = useState(false)
-  
-  // SQL data
-  const [tables, setTables] = useState<Map<string, Set<string>>>(new Map())
-  const [sqlSource, setSqlSource] = useState<DataSource | null>(null)
   
   // Drive data
   const [files, setFiles] = useState<FileMetadata[]>([])
@@ -165,11 +163,14 @@ export default function KnowledgeMapPage() {
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set())
   const [expandedSpreadsheets, setExpandedSpreadsheets] = useState<Set<string>>(new Set())
   const [generatingSummaries, setGeneratingSummaries] = useState(false)
+  const [fileSummaries, setFileSummaries] = useState<Map<string, any>>(new Map())
 
   useEffect(() => {
-    loadData()
-    checkAuth()
-  }, [])
+    if (user) {
+      loadData()
+      checkAuth()
+    }
+  }, [user])
 
   useEffect(() => {
     // Build folder tree when files change
@@ -180,72 +181,81 @@ export default function KnowledgeMapPage() {
   async function checkAuth() {
     const res = await fetch('/api/auth/check')
     const data = await res.json()
-    if (data.authenticated) {
-      setDriveToken(data.token)
-    }
+    setHasGoogleAuth(data.authenticated)
   }
 
   async function loadData() {
+    if (!user) return
+    
     setLoading(true)
     
-    // Load data sources
-    const { data: sources } = await supabase
+    // Get user's Drive source
+    const { data: source } = await supabase
       .from('data_sources')
       .select('*')
+      .eq('user_id', user.id)
+      .eq('type', 'drive')
+      .single()
     
-    setSqlSource(sources?.find(s => s.type === 'sql') || null)
-    setDriveSource(sources?.find(s => s.type === 'drive') || null)
+    if (!source) {
+      setDriveSource(null)
+      setFiles([])
+      setLoading(false)
+      return
+    }
     
-    // Load SQL schema
-    const { data: schemas } = await supabase
-      .from('schema_metadata')
-      .select('*')
-    
-    const tableMap = new Map<string, Set<string>>()
-    schemas?.forEach(schema => {
-      if (!tableMap.has(schema.table_name)) {
-        tableMap.set(schema.table_name, new Set())
-      }
-      tableMap.get(schema.table_name)?.add(schema.column_name)
-    })
-    setTables(tableMap)
+    setDriveSource(source)
     
     // Load Drive files
     const { data: driveFiles } = await supabase
       .from('file_metadata')
       .select('*')
+      .eq('source_id', source.id)
       .order('name')
     
     setFiles(driveFiles || [])
+    
+    // Load summaries
+    const { data: summaries } = await supabase
+      .from('file_summaries')
+      .select('*')
+      .eq('source_id', source.id)
+    
+    const summaryMap = new Map()
+    summaries?.forEach(s => {
+      summaryMap.set(s.file_id, s)
+    })
+    setFileSummaries(summaryMap)
+    
     setLoading(false)
   }
 
   async function handleResync() {
-    if (activeTab === 'drive' && folderTree.length > 0) {
-      if (!confirm('Resync all folders with the latest files from Google Drive?')) {
-        return
-      }
+    if (folderTree.length === 0) {
+      await loadData()
+      return
+    }
+    
+    if (!confirm('Resync all folders with the latest files from Google Drive?')) {
+      return
     }
     
     setSyncing(true)
     
-    if (activeTab === 'drive' && driveToken) {
-      // Resync all root folders
-      try {
-        for (const folder of folderTree) {
-          const response = await fetch('/api/drive/index', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ folderId: folder.id }),
-          })
-          
-          if (!response.ok) {
-            console.error(`Failed to resync folder: ${folder.name}`)
-          }
+    try {
+      for (const folder of folderTree) {
+        const response = await fetch('/api/drive/index', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ folderId: folder.id }),
+        })
+        
+        if (!response.ok) {
+          console.error(`Failed to resync folder: ${folder.name}`)
         }
-      } catch (error) {
-        console.error('Error resyncing folders:', error)
       }
+    } catch (error) {
+      console.error('Error resyncing folders:', error)
     }
     
     await loadData()
@@ -257,7 +267,7 @@ export default function KnowledgeMapPage() {
   }
 
   async function indexDriveFolder() {
-    if (!folderUrl || !driveToken) return
+    if (!folderUrl || !hasGoogleAuth) return
     
     const match = folderUrl.match(/\/folders\/([a-zA-Z0-9-_]+)/)
     const folderId = match ? match[1] : 'root'
@@ -408,28 +418,15 @@ export default function KnowledgeMapPage() {
       if (response.ok) {
         await loadData()
         
-        if (data.resynced) {
-          let message = `Folder resynced successfully!\n`
-          message += `- Files updated: ${data.indexed}\n`
-          
-          if (data.summariesGenerated !== undefined && data.summariesGenerated > 0) {
-            message += `- Summaries generated: ${data.summariesGenerated}`
-          }
-          
-          alert(message)
-          console.log('Folder resync complete:', data)
-        } else {
-          // This is a new folder indexing
-          let message = `Folder indexed successfully!\n`
-          message += `- Files indexed: ${data.indexed}\n`
-          
-          if (generateSummariesOnIndex && data.summariesGenerated !== undefined) {
-            message += `- Summaries generated: ${data.summariesGenerated}`
-          }
-          
-          alert(message)
-          console.log('New folder indexing complete:', data)
+        let message = data.resynced ? 'Folder resynced successfully!\n' : 'Folder indexed successfully!\n'
+        message += `- Files updated: ${data.indexed}\n`
+        
+        if (data.summariesGenerated !== undefined && data.summariesGenerated > 0) {
+          message += `- Summaries generated: ${data.summariesGenerated}`
         }
+        
+        alert(message)
+        console.log('Folder operation complete:', data)
       } else {
         alert('Failed to resync folder')
       }
@@ -538,6 +535,7 @@ export default function KnowledgeMapPage() {
               const group = getFileGroup(file.mime_type, file.name)
               const isSpreadsheet = file.metadata?.isSpreadsheet
               const isExpandedSpreadsheet = expandedSpreadsheets.has(file.file_id)
+              const summary = fileSummaries.get(file.file_id)
               
               return (
                 <div key={file.id}>
@@ -561,14 +559,9 @@ export default function KnowledgeMapPage() {
                         ({file.metadata.sheets.length} sheets)
                       </span>
                     )}
-                    {file.metadata?.summary && (
-                      <span className="text-xs text-gray-600 italic ml-2" title={file.metadata.summary}>
-                        "{file.metadata.summary.length > 60 ? file.metadata.summary.substring(0, 60) + '...' : file.metadata.summary}"
-                      </span>
-                    )}
-                    {file.metadata?.summaryStatus === 'failed' && (
-                      <span className="text-xs text-red-600 ml-2" title={file.metadata.summaryError}>
-                        ⚠️ Summary failed
+                    {summary?.summary && (
+                      <span className="text-xs text-gray-600 italic ml-2" title={summary.summary}>
+                        "{summary.summary.length > 60 ? summary.summary.substring(0, 60) + '...' : summary.summary}"
                       </span>
                     )}
                     <span className="text-xs text-gray-500 ml-auto">
@@ -591,15 +584,10 @@ export default function KnowledgeMapPage() {
                             </span>
                           </div>
                           
-                          {/* Sheet summary */}
-                          {sheet.summary && (
+                          {/* Sheet summary from file_summaries table */}
+                          {summary?.sheet_summaries?.[sheet.name] && (
                             <div className="ml-6 text-xs text-gray-600 italic">
-                              "{sheet.summary}"
-                            </div>
-                          )}
-                          {sheet.summaryStatus === 'missing' && (
-                            <div className="ml-6 text-xs text-orange-600">
-                              ⚠️ Summary missing for this sheet
+                              "{summary.sheet_summaries[sheet.name]}"
                             </div>
                           )}
                           
@@ -642,7 +630,9 @@ export default function KnowledgeMapPage() {
             <h1 className="text-xl font-semibold">Knowledge Map</h1>
             
             <div className="flex items-center gap-4">
-              {activeTab === 'drive' && driveToken && files.length > 0 && (
+              <span className="text-sm text-gray-600">{user?.email}</span>
+              
+              {activeTab === 'drive' && hasGoogleAuth && files.length > 0 && (
                 <>
                   <button
                     onClick={generateSummariesForFiles}
@@ -662,7 +652,7 @@ export default function KnowledgeMapPage() {
                 </>
               )}
               
-              {activeTab === 'drive' && !driveToken && (
+              {activeTab === 'drive' && !hasGoogleAuth && (
                 <button
                   onClick={linkGoogleDrive}
                   className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-md text-sm transition-colors"
@@ -677,7 +667,14 @@ export default function KnowledgeMapPage() {
                 className="bg-gray-600 hover:bg-gray-700 disabled:bg-gray-400 text-white px-4 py-2 rounded-md text-sm transition-colors"
                 title={activeTab === 'drive' ? 'Resync all folders with Google Drive' : 'Reload data'}
               >
-                {syncing ? 'Syncing...' : activeTab === 'drive' && folderTree.length > 0 ? 'Resync All' : 'Refresh'}
+                {syncing ? 'Syncing...' : folderTree.length > 0 ? 'Resync All' : 'Refresh'}
+              </button>
+              
+              <button
+                onClick={signOut}
+                className="text-gray-600 hover:text-gray-800 text-sm"
+              >
+                Sign Out
               </button>
             </div>
           </div>
@@ -689,14 +686,10 @@ export default function KnowledgeMapPage() {
         <div className="border-b border-gray-200 mb-6">
           <nav className="-mb-px flex space-x-8">
             <button
-              onClick={() => setActiveTab('sql')}
-              className={`py-2 px-1 border-b-2 font-medium text-sm ${
-                activeTab === 'sql'
-                  ? 'border-blue-500 text-blue-600'
-                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-              }`}
+              disabled={true}
+              className="py-2 px-1 border-b-2 font-medium text-sm border-transparent text-gray-300 cursor-not-allowed"
             >
-              SQL Database
+              SQL Database (Coming Soon)
             </button>
             <button
               onClick={() => setActiveTab('drive')}
@@ -719,40 +712,21 @@ export default function KnowledgeMapPage() {
           <>
             {/* SQL View */}
             {activeTab === 'sql' && (
-              <div>
-                {sqlSource ? (
-                  <div>
-                    <h2 className="text-lg font-medium mb-4">Database Tables</h2>
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                      {Array.from(tables.entries()).map(([tableName, columns]) => (
-                        <div
-                          key={tableName}
-                          className="bg-white rounded-lg shadow-sm border border-gray-200 p-4"
-                        >
-                          <h3 className="font-medium text-gray-900 mb-2">{tableName}</h3>
-                          <div className="text-sm text-gray-600">
-                            <p className="mb-1">{columns.size} columns</p>
-                            <p className="text-xs">
-                              {Array.from(columns).slice(0, 3).join(', ')}
-                              {columns.size > 3 && '...'}
-                            </p>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                ) : (
-                  <div className="text-center py-12 text-gray-500">
-                    No SQL database connected
-                  </div>
-                )}
+              <div className="text-center py-12 text-gray-500">
+                <div className="mb-4">
+                  <svg className="w-16 h-16 mx-auto text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4m0 5c0 2.21-3.582 4-8 4s-8-1.79-8-4" />
+                  </svg>
+                </div>
+                <h3 className="text-lg font-medium mb-2">Database Connection Coming Soon</h3>
+                <p>Connect to your PostgreSQL, MySQL, or other databases to query with natural language.</p>
               </div>
             )}
 
             {/* Drive View */}
             {activeTab === 'drive' && (
               <div>
-                {driveToken && (
+                {hasGoogleAuth && (
                   <div className="mb-6">
                     <div className="flex gap-2 mb-2">
                       <input
@@ -794,6 +768,8 @@ export default function KnowledgeMapPage() {
                         <h4 className="text-sm font-medium text-gray-700 mb-2">Loose Files</h4>
                         {files.filter(f => !f.metadata?.isFolder && !f.metadata?.parentFolderId).map(file => {
                           const group = getFileGroup(file.mime_type, file.name)
+                          const summary = fileSummaries.get(file.file_id)
+                          
                           return (
                             <div
                               key={file.id}
@@ -804,6 +780,11 @@ export default function KnowledgeMapPage() {
                                 style={{ backgroundColor: group.color }}
                               />
                               <span className="text-sm text-gray-700">{file.name}</span>
+                              {summary?.summary && (
+                                <span className="text-xs text-gray-600 italic ml-2" title={summary.summary}>
+                                  "{summary.summary.length > 60 ? summary.summary.substring(0, 60) + '...' : summary.summary}"
+                                </span>
+                              )}
                               <span className="text-xs text-gray-500 ml-auto">
                                 {(file.size / 1024).toFixed(1)} KB
                               </span>
@@ -815,7 +796,7 @@ export default function KnowledgeMapPage() {
                   </div>
                 ) : (
                   <div className="text-center py-12 text-gray-500">
-                    {driveToken ? 'No files indexed yet' : 'Please link your Google Drive'}
+                    {hasGoogleAuth ? 'No files indexed yet' : 'Please link your Google Drive'}
                   </div>
                 )}
               </div>

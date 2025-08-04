@@ -1,7 +1,17 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { createRouteHandlerClient } from '@supabase/auth-helpers-nextjs'
+import { cookies } from 'next/headers'
 import { getTokenFromCode } from '@/lib/google-drive'
+import { saveUserGoogleTokens } from '@/lib/google-tokens'
 
 export async function GET(request: NextRequest) {
+  const supabase = createRouteHandlerClient({ cookies })
+  const { data: { session } } = await supabase.auth.getSession()
+  
+  if (!session) {
+    return NextResponse.redirect(new URL('/login', request.url))
+  }
+  
   const searchParams = request.nextUrl.searchParams
   const code = searchParams.get('code')
   
@@ -12,17 +22,10 @@ export async function GET(request: NextRequest) {
   try {
     const tokens = await getTokenFromCode(code)
     
-    // In production, store tokens securely
-    // For now, we'll pass them to the client
-    const response = NextResponse.redirect(new URL('/', request.url))
-    response.cookies.set('google_tokens', JSON.stringify(tokens), {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'lax',
-      maxAge: 60 * 60 * 24 * 7, // 7 days
-    })
+    // Save tokens to database
+    await saveUserGoogleTokens(session.user.id, tokens)
     
-    return response
+    return NextResponse.redirect(new URL('/', request.url))
   } catch (error) {
     console.error('OAuth error:', error)
     return NextResponse.redirect(new URL('/', request.url))
