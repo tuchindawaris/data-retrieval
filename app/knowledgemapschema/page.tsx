@@ -9,19 +9,37 @@ import { DriveKnowledgeMap } from '@/lib/knowledge-map-types'
 type ViewMode = 'drive'
 
 export default function KnowledgeMapSchemaPage() {
-  const { user, signOut } = useAuth()
+  const { user } = useAuth()
   const [driveMap, setDriveMap] = useState<DriveKnowledgeMap | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [hasGoogleAuth, setHasGoogleAuth] = useState<boolean | null>(null)
   
   // Use auth-helpers client for consistency
   const supabase = createClientComponentClient()
 
   useEffect(() => {
-    if (user) {
+    checkAuth()
+  }, [])
+
+  useEffect(() => {
+    if (user && hasGoogleAuth !== null) {
       loadKnowledgeMaps()
     }
-  }, [user])
+  }, [user, hasGoogleAuth])
+
+  async function checkAuth() {
+    try {
+      const res = await fetch('/api/auth/check', {
+        credentials: 'include'
+      })
+      const data = await res.json()
+      setHasGoogleAuth(data.authenticated)
+    } catch (error) {
+      console.error('Error checking Google auth:', error)
+      setHasGoogleAuth(false)
+    }
+  }
 
   async function loadKnowledgeMaps() {
     if (!user) return
@@ -41,6 +59,28 @@ export default function KnowledgeMapSchemaPage() {
   }
 
   async function loadDriveKnowledgeMap(): Promise<DriveKnowledgeMap | null> {
+    // If not authenticated with Google, return empty map
+    if (!hasGoogleAuth) {
+      return {
+        timestamp: new Date().toISOString(),
+        source: 'drive',
+        totalItems: 0,
+        knowledgeTree: [],
+        statistics: {
+          folders: 0,
+          files: 0,
+          spreadsheets: 0,
+          documents: 0,
+          processedSpreadsheets: 0,
+          filesWithSummaries: 0,
+          filesWithFailedSummaries: 0,
+          totalSheets: 0,
+          totalColumns: 0,
+          totalSize: 0
+        }
+      }
+    }
+
     // Get user's Drive source
     const { data: source } = await supabase
       .from('data_sources')
@@ -140,7 +180,6 @@ export default function KnowledgeMapSchemaPage() {
     return (
       <div className="min-h-screen bg-gray-50 p-8">
         <div className="max-w-7xl mx-auto">
-          <h1 className="text-2xl font-bold mb-4">Knowledge Map Schema</h1>
           <div className="flex items-center justify-center h-64">
             <div className="text-gray-600">Loading knowledge maps...</div>
           </div>
@@ -153,7 +192,6 @@ export default function KnowledgeMapSchemaPage() {
     return (
       <div className="min-h-screen bg-gray-50 p-8">
         <div className="max-w-7xl mx-auto">
-          <h1 className="text-2xl font-bold mb-4">Knowledge Map Schema</h1>
           <div className="bg-red-50 border border-red-200 rounded-lg p-4">
             <p className="text-red-800">{error}</p>
           </div>
@@ -169,14 +207,13 @@ export default function KnowledgeMapSchemaPage() {
         <div className="flex justify-between items-center mb-6">
           <h1 className="text-2xl font-bold">Knowledge Map Schema</h1>
           <div className="flex items-center gap-4">
-            <span className="text-sm text-gray-600">{user?.email}</span>
             <button
               onClick={() => loadKnowledgeMaps()}
               className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-md text-sm"
             >
               Refresh
             </button>
-            {driveMap && (
+            {driveMap && hasGoogleAuth && driveMap.totalItems > 0 && (
               <button
                 onClick={() => downloadJSON(driveMap, 'drive-knowledge-map.json')}
                 className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-md text-sm"
@@ -184,12 +221,6 @@ export default function KnowledgeMapSchemaPage() {
                 Download Drive JSON
               </button>
             )}
-            <button
-              onClick={signOut}
-              className="text-gray-600 hover:text-gray-800 text-sm"
-            >
-              Sign Out
-            </button>
           </div>
         </div>
 
@@ -206,7 +237,14 @@ export default function KnowledgeMapSchemaPage() {
           <h2 className="text-lg font-semibold mb-3 text-green-700">
             Drive Knowledge Map
           </h2>
-          {driveMap ? (
+          {!hasGoogleAuth ? (
+            <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-6 text-center">
+              <svg className="w-12 h-12 mx-auto text-yellow-600 mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+              </svg>
+              <p className="text-yellow-800">Google Drive not connected. Connect your account to view the Drive schema.</p>
+            </div>
+          ) : driveMap ? (
             <>
               <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4 mb-4">
                 <h3 className="font-medium mb-3">Drive Statistics</h3>
@@ -263,11 +301,18 @@ export default function KnowledgeMapSchemaPage() {
                   </div>
                 </div>
               </div>
-              <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
-                <pre className="text-xs overflow-auto">
-                  {JSON.stringify(driveMap, null, 2)}
-                </pre>
-              </div>
+              {driveMap.totalItems > 0 && (
+                <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
+                  <pre className="text-xs overflow-auto">
+                    {JSON.stringify(driveMap, null, 2)}
+                  </pre>
+                </div>
+              )}
+              {driveMap.totalItems === 0 && (
+                <div className="bg-gray-100 rounded-lg p-4 text-gray-600 text-center">
+                  No Drive data indexed yet. Go to Knowledge Map to index some folders.
+                </div>
+              )}
             </>
           ) : (
             <div className="bg-gray-100 rounded-lg p-4 text-gray-600">

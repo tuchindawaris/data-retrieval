@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react'
 import { createClientComponentClient } from '@supabase/auth-helpers-nextjs'
 import { useAuth } from '@/contexts/AuthContext'
+import GoogleAccountStatus from '@/components/GoogleAccountStatus'
 import type { DataSource, FileMetadata } from '@/lib/supabase'
 
 // File type groupings for uniform parsing
@@ -145,12 +146,12 @@ function getFileGroup(mimeType: string, fileName: string) {
 }
 
 export default function KnowledgeMapPage() {
-  const { user, signOut } = useAuth()
+  const { user } = useAuth()
   const [activeTab, setActiveTab] = useState<'sql' | 'drive'>('drive')
   const [loading, setLoading] = useState(true)
   const [syncing, setSyncing] = useState(false)
   const [indexing, setIndexing] = useState(false)
-  const [hasGoogleAuth, setHasGoogleAuth] = useState(false)
+  const [hasGoogleAuth, setHasGoogleAuth] = useState<boolean | null>(null)
   const [folderUrl, setFolderUrl] = useState('')
   const [deletingFolder, setDeletingFolder] = useState<string | null>(null)
   const [clearingAll, setClearingAll] = useState(false)
@@ -170,10 +171,15 @@ export default function KnowledgeMapPage() {
 
   useEffect(() => {
     if (user) {
-      loadData()
       checkAuth()
     }
   }, [user])
+
+  useEffect(() => {
+    if (user && hasGoogleAuth !== null) {
+      loadData()
+    }
+  }, [user, hasGoogleAuth])
 
   useEffect(() => {
     // Build folder tree when files change
@@ -193,6 +199,15 @@ export default function KnowledgeMapPage() {
     if (!user) return
     
     setLoading(true)
+    
+    // Only load Drive data if authenticated with Google
+    if (!hasGoogleAuth) {
+      setDriveSource(null)
+      setFiles([])
+      setFileSummaries(new Map())
+      setLoading(false)
+      return
+    }
     
     // Get user's Drive source
     const { data: source } = await supabase
@@ -268,9 +283,7 @@ export default function KnowledgeMapPage() {
     setSyncing(false)
   }
 
-  async function linkGoogleDrive() {
-    window.location.href = '/api/auth/google'
-  }
+
 
   async function indexDriveFolder() {
     if (!folderUrl || !hasGoogleAuth) return
@@ -637,14 +650,15 @@ export default function KnowledgeMapPage() {
 
   return (
     <div className="min-h-screen bg-gray-50">
-      <header className="bg-white shadow-sm border-b">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex justify-between items-center h-16">
-            <h1 className="text-xl font-semibold">Knowledge Map</h1>
-            
-            <div className="flex items-center gap-4">
-              <span className="text-sm text-gray-600">{user?.email}</span>
-              
+      {/* Google Account Status */}
+      <GoogleAccountStatus />
+
+      {/* Secondary Header with Actions */}
+      <div className="bg-white border-b">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
+          <div className="flex justify-between items-center">
+            <h2 className="text-lg font-medium">Knowledge Map</h2>
+            <div className="flex items-center gap-3">
               {activeTab === 'drive' && hasGoogleAuth && files.length > 0 && (
                 <>
                   <button
@@ -665,14 +679,7 @@ export default function KnowledgeMapPage() {
                 </>
               )}
               
-              {activeTab === 'drive' && !hasGoogleAuth && (
-                <button
-                  onClick={linkGoogleDrive}
-                  className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-md text-sm transition-colors"
-                >
-                  Link Google Drive
-                </button>
-              )}
+
               
               <button
                 onClick={handleResync}
@@ -682,17 +689,10 @@ export default function KnowledgeMapPage() {
               >
                 {syncing ? 'Syncing...' : folderTree.length > 0 ? 'Resync All' : 'Refresh'}
               </button>
-              
-              <button
-                onClick={signOut}
-                className="text-gray-600 hover:text-gray-800 text-sm"
-              >
-                Sign Out
-              </button>
             </div>
           </div>
         </div>
-      </header>
+      </div>
 
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
         {/* Tabs */}
@@ -770,46 +770,56 @@ export default function KnowledgeMapPage() {
                 )}
 
                 {/* Folder Tree */}
-                {(folderTree.length > 0 || files.some(f => !f.metadata?.isFolder)) ? (
-                  <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
-                    <h3 className="font-medium text-gray-900 mb-4">Imported Folders</h3>
-                    {folderTree.map(node => renderFolderNode(node))}
-                    
-                    {/* Files not in any folder */}
-                    {files.filter(f => !f.metadata?.isFolder && !f.metadata?.parentFolderId).length > 0 && (
-                      <div className="mt-4 pt-4 border-t">
-                        <h4 className="text-sm font-medium text-gray-700 mb-2">Loose Files</h4>
-                        {files.filter(f => !f.metadata?.isFolder && !f.metadata?.parentFolderId).map(file => {
-                          const group = getFileGroup(file.mime_type, file.name)
-                          const summary = fileSummaries.get(file.file_id)
-                          
-                          return (
-                            <div
-                              key={file.id}
-                              className="flex items-center gap-2 p-2 hover:bg-gray-50 rounded"
-                            >
+                {hasGoogleAuth ? (
+                  (folderTree.length > 0 || files.some(f => !f.metadata?.isFolder)) ? (
+                    <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
+                      <h3 className="font-medium text-gray-900 mb-4">Imported Folders</h3>
+                      {folderTree.map(node => renderFolderNode(node))}
+                      
+                      {/* Files not in any folder */}
+                      {files.filter(f => !f.metadata?.isFolder && !f.metadata?.parentFolderId).length > 0 && (
+                        <div className="mt-4 pt-4 border-t">
+                          <h4 className="text-sm font-medium text-gray-700 mb-2">Loose Files</h4>
+                          {files.filter(f => !f.metadata?.isFolder && !f.metadata?.parentFolderId).map(file => {
+                            const group = getFileGroup(file.mime_type, file.name)
+                            const summary = fileSummaries.get(file.file_id)
+                            
+                            return (
                               <div
-                                className="w-3 h-3 rounded-sm"
-                                style={{ backgroundColor: group.color }}
-                              />
-                              <span className="text-sm text-gray-700">{file.name}</span>
-                              {summary?.summary && (
-                                <span className="text-xs text-gray-600 italic ml-2" title={summary.summary}>
-                                  "{summary.summary.length > 60 ? summary.summary.substring(0, 60) + '...' : summary.summary}"
+                                key={file.id}
+                                className="flex items-center gap-2 p-2 hover:bg-gray-50 rounded"
+                              >
+                                <div
+                                  className="w-3 h-3 rounded-sm"
+                                  style={{ backgroundColor: group.color }}
+                                />
+                                <span className="text-sm text-gray-700">{file.name}</span>
+                                {summary?.summary && (
+                                  <span className="text-xs text-gray-600 italic ml-2" title={summary.summary}>
+                                    "{summary.summary.length > 60 ? summary.summary.substring(0, 60) + '...' : summary.summary}"
+                                  </span>
+                                )}
+                                <span className="text-xs text-gray-500 ml-auto">
+                                  {(file.size / 1024).toFixed(1)} KB
                                 </span>
-                              )}
-                              <span className="text-xs text-gray-500 ml-auto">
-                                {(file.size / 1024).toFixed(1)} KB
-                              </span>
-                            </div>
-                          )
-                        })}
-                      </div>
-                    )}
-                  </div>
+                              </div>
+                            )
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="text-center py-12 text-gray-500">
+                      No files indexed yet
+                    </div>
+                  )
                 ) : (
-                  <div className="text-center py-12 text-gray-500">
-                    {hasGoogleAuth ? 'No files indexed yet' : 'Please link your Google Drive'}
+                  <div className="text-center py-12">
+                    <svg className="w-16 h-16 mx-auto text-gray-300 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+                    </svg>
+                    <h3 className="text-lg font-medium text-gray-900 mb-2">Google Drive Not Connected</h3>
+                    <p className="text-gray-500 mb-4">Connect your Google Drive account to view and manage your files</p>
                   </div>
                 )}
               </div>

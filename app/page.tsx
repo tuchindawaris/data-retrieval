@@ -1,26 +1,11 @@
 'use client'
 
 import Link from 'next/link'
-import { useAuth } from '@/contexts/AuthContext'
 
 export default function Home() {
-  const { user, signOut } = useAuth()
-
   return (
     <div className="min-h-screen bg-gray-50">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
-        <div className="flex justify-end mb-4">
-          <div className="flex items-center gap-4">
-            <span className="text-sm text-gray-600">{user?.email}</span>
-            <button
-              onClick={signOut}
-              className="text-gray-600 hover:text-gray-800 text-sm"
-            >
-              Sign Out
-            </button>
-          </div>
-        </div>
-        
         <div className="text-center">
           <h1 className="text-4xl font-bold text-gray-900 mb-4">
             Data Retrieval Agent
