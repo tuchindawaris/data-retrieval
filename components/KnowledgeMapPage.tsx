@@ -34,51 +34,11 @@ const FILE_GROUPS = {
       'application/vnd.oasis.opendocument.text'
     ]
   },
-  code: {
-    color: '#8b5cf6', // purple
-    label: 'Code/Scripts',
-    extensions: ['js', 'ts', 'jsx', 'tsx', 'py', 'java', 'cpp', 'c', 'h', 'go', 'rs', 'php', 'rb', 'swift', 'kt', 'json', 'xml', 'yaml', 'yml', 'html', 'css', 'sql'],
-    mimeTypes: [
-      'text/javascript',
-      'application/javascript',
-      'application/json',
-      'text/xml',
-      'application/xml',
-      'text/html',
-      'text/css'
-    ]
-  },
-  archive: {
-    color: '#f97316', // orange
-    label: 'Archives',
-    extensions: ['zip', 'tar', 'gz', 'rar', '7z'],
-    mimeTypes: [
-      'application/zip',
-      'application/x-zip-compressed',
-      'application/x-tar',
-      'application/gzip',
-      'application/x-rar-compressed',
-      'application/x-7z-compressed'
-    ]
-  },
-  future: {
+  unsupported: {
     color: '#6b7280', // gray
-    label: 'Future Implementation',
-    extensions: ['pdf', 'ppt', 'pptx', 'jpg', 'jpeg', 'png', 'gif', 'bmp', 'svg', 'webp', 'mp4', 'avi', 'mov', 'mp3', 'wav'],
-    mimeTypes: [
-      'application/pdf',
-      'application/vnd.ms-powerpoint',
-      'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-      'application/vnd.google-apps.presentation',
-      'image/jpeg',
-      'image/png',
-      'image/gif',
-      'image/svg+xml',
-      'image/webp',
-      'video/mp4',
-      'audio/mpeg',
-      'audio/wav'
-    ]
+    label: 'Not Supported Yet',
+    extensions: [], // All other extensions
+    mimeTypes: [] // All other mime types
   }
 }
 
@@ -136,13 +96,20 @@ function buildFolderTree(files: FileMetadata[]): FolderNode[] {
 function getFileGroup(mimeType: string, fileName: string) {
   const extension = fileName.split('.').pop()?.toLowerCase() || ''
   
-  for (const [groupKey, group] of Object.entries(FILE_GROUPS)) {
-    if (group.mimeTypes.includes(mimeType) || group.extensions.includes(extension)) {
-      return { key: groupKey, ...group }
-    }
+  // Check if it's a spreadsheet
+  if (FILE_GROUPS.spreadsheet.mimeTypes.includes(mimeType) || 
+      FILE_GROUPS.spreadsheet.extensions.includes(extension)) {
+    return { key: 'spreadsheet', ...FILE_GROUPS.spreadsheet }
   }
   
-  return { key: 'future', ...FILE_GROUPS.future }
+  // Check if it's a document
+  if (FILE_GROUPS.document.mimeTypes.includes(mimeType) || 
+      FILE_GROUPS.document.extensions.includes(extension)) {
+    return { key: 'document', ...FILE_GROUPS.document }
+  }
+  
+  // Everything else is unsupported
+  return { key: 'unsupported', ...FILE_GROUPS.unsupported }
 }
 
 export default function KnowledgeMapPage() {
@@ -580,6 +547,9 @@ export default function KnowledgeMapPage() {
                       style={{ backgroundColor: group.color }}
                     />
                     <span className="text-sm text-gray-700">{file.name}</span>
+                    {group.key === 'unsupported' && (
+                      <span className="text-xs text-gray-500 italic ml-2">(not supported yet)</span>
+                    )}
                     {isSpreadsheet && file.metadata?.sheets && (
                       <span className="text-xs text-gray-500">
                         ({file.metadata.sheets.length} sheets)
@@ -772,9 +742,30 @@ export default function KnowledgeMapPage() {
                 {/* Folder Tree */}
                 {hasGoogleAuth ? (
                   (folderTree.length > 0 || files.some(f => !f.metadata?.isFolder)) ? (
-                    <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
-                      <h3 className="font-medium text-gray-900 mb-4">Imported Folders</h3>
-                      {folderTree.map(node => renderFolderNode(node))}
+                    <div>
+                      {/* File Type Legend */}
+                      <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4 mb-4">
+                        <h4 className="text-sm font-medium text-gray-900 mb-3">File Type Support</h4>
+                        <div className="flex flex-wrap gap-4 text-sm">
+                          <div className="flex items-center gap-2">
+                            <div className="w-3 h-3 rounded-sm bg-green-500"></div>
+                            <span>Spreadsheets (Supported)</span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <div className="w-3 h-3 rounded-sm bg-blue-500"></div>
+                            <span>Documents (Supported)</span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <div className="w-3 h-3 rounded-sm bg-gray-500"></div>
+                            <span>Other Files (Not Supported Yet)</span>
+                          </div>
+                        </div>
+                      </div>
+                      
+                      {/* Folder Tree */}
+                      <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
+                        <h3 className="font-medium text-gray-900 mb-4">Imported Folders</h3>
+                        {folderTree.map(node => renderFolderNode(node))}
                       
                       {/* Files not in any folder */}
                       {files.filter(f => !f.metadata?.isFolder && !f.metadata?.parentFolderId).length > 0 && (
@@ -794,6 +785,9 @@ export default function KnowledgeMapPage() {
                                   style={{ backgroundColor: group.color }}
                                 />
                                 <span className="text-sm text-gray-700">{file.name}</span>
+                                {group.key === 'unsupported' && (
+                                  <span className="text-xs text-gray-500 italic ml-2">(not supported yet)</span>
+                                )}
                                 {summary?.summary && (
                                   <span className="text-xs text-gray-600 italic ml-2" title={summary.summary}>
                                     "{summary.summary.length > 60 ? summary.summary.substring(0, 60) + '...' : summary.summary}"
@@ -807,6 +801,7 @@ export default function KnowledgeMapPage() {
                           })}
                         </div>
                       )}
+                      </div>
                     </div>
                   ) : (
                     <div className="text-center py-12 text-gray-500">

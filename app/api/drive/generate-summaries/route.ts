@@ -192,7 +192,8 @@ export async function POST(request: NextRequest) {
           console.error(`  ✗ Error extracting text from ${file.name}:`, error.message)
         }
       } else {
-        skippedFiles.push({ name: file.name, reason: 'unsupported file type' })
+        // Not a spreadsheet or document - it's an unsupported file type
+        skippedFiles.push({ name: file.name, reason: 'not a supported file type (only spreadsheets and documents are supported)' })
       }
       
       if (content) {
