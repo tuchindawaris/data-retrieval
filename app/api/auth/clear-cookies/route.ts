@@ -1,15 +1,24 @@
 import { NextResponse } from 'next/server'
 import { cookies } from 'next/headers'
+import { createRouteHandlerClient } from '@supabase/auth-helpers-nextjs'
 
 export async function POST() {
   const cookieStore = cookies()
+  const supabase = createRouteHandlerClient({ cookies })
   
-  // Get all cookies
+  // Sign out from Supabase (this will clear the auth cookies properly)
+  await supabase.auth.signOut()
+  
+  // Also clear any Google tokens
+  cookieStore.delete('google_tokens')
+  
+  // Get all cookies and clear any remaining auth-related ones
   const allCookies = cookieStore.getAll()
   
-  // Clear all Supabase auth tokens from other projects
+  // Clear any Supabase cookies that might remain
   const supabaseCookies = allCookies.filter(c => 
-    c.name.startsWith('sb-') && c.name.endsWith('-auth-token')
+    c.name.startsWith('sb-') || 
+    c.name.includes('supabase')
   )
   
   // Clear each one
@@ -17,14 +26,8 @@ export async function POST() {
     cookieStore.delete(cookie.name)
   })
   
-  // Also clear any other auth-related cookies
-  const authCookies = ['sb-access-token', 'sb-refresh-token']
-  authCookies.forEach(name => {
-    cookieStore.delete(name)
-  })
-  
   return NextResponse.json({ 
     cleared: supabaseCookies.map(c => c.name),
-    message: 'Cleared all Supabase auth cookies. Please log in again.'
+    message: 'Cleared all auth cookies'
   })
 }

@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { supabase } from '@/lib/supabase'
+import { createClientComponentClient } from '@supabase/auth-helpers-nextjs'
 import { useAuth } from '@/contexts/AuthContext'
 import type { DataSource, FileMetadata } from '@/lib/supabase'
 
@@ -164,6 +164,9 @@ export default function KnowledgeMapPage() {
   const [expandedSpreadsheets, setExpandedSpreadsheets] = useState<Set<string>>(new Set())
   const [generatingSummaries, setGeneratingSummaries] = useState(false)
   const [fileSummaries, setFileSummaries] = useState<Map<string, any>>(new Map())
+  
+  // Use auth-helpers client for consistency
+  const supabase = createClientComponentClient()
 
   useEffect(() => {
     if (user) {

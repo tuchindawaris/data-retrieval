@@ -2,7 +2,7 @@
 
 import { createContext, useContext, useEffect, useState } from 'react'
 import { User } from '@supabase/supabase-js'
-import { supabase } from '@/lib/supabase'
+import { createClientComponentClient } from '@supabase/auth-helpers-nextjs'
 import { useRouter } from 'next/navigation'
 
 interface AuthContextType {
@@ -19,6 +19,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null)
   const [loading, setLoading] = useState(true)
   const router = useRouter()
+  
+  // Use auth-helpers client for consistent cookie handling
+  const supabase = createClientComponentClient()
 
   useEffect(() => {
     // Check active session
@@ -39,24 +42,30 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
       setUser(session?.user ?? null)
       
+      // Refresh the router to update server components
+      router.refresh()
+      
       // Only handle sign out navigation
       if (event === 'SIGNED_OUT') {
         router.push('/login')
-        router.refresh()
       }
     })
 
     return () => subscription.unsubscribe()
-  }, [router])
+  }, [router, supabase])
 
   const signIn = async (email: string, password: string) => {
     const { data, error } = await supabase.auth.signInWithPassword({ email, password })
     if (error) throw error
+    
+    // Refresh router to ensure cookies are set
+    router.refresh()
   }
 
   const signUp = async (email: string, password: string) => {
     const { data, error } = await supabase.auth.signUp({ email, password })
     if (error) throw error
+    
     // For development, auto-confirm and sign in
     // In production, you'd send a confirmation email
     await signIn(email, password)

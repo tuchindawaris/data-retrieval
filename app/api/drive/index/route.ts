@@ -145,67 +145,41 @@ export async function POST(request: NextRequest) {
   console.log('\n=== DRIVE INDEX REQUEST ===')
   
   try {
-    // Debug: Log all cookies
-    const cookieStore = cookies()
-    const allCookies = cookieStore.getAll()
-    console.log('All cookies:', allCookies.map(c => ({ name: c.name, hasValue: !!c.value })))
-    
-    // Check Supabase session - try multiple approaches
-    console.log('Checking Supabase session...')
-    
-    // Method 1: Using createRouteHandlerClient
+    // Create Supabase client with the request/response
     const supabase = createRouteHandlerClient({ cookies })
+    
+    // Get the session - this should work with the middleware properly setting cookies
     const { data: { session }, error: sessionError } = await supabase.auth.getSession()
     
     if (sessionError) {
-      console.error('Supabase session error:', sessionError)
-    }
-    
-    // Method 2: Try to get user directly
-    const { data: { user }, error: userError } = await supabase.auth.getUser()
-    
-    if (userError) {
-      console.error('Supabase user error:', userError)
-    }
-    
-    // Use session or user, whichever is available
-    const currentUser = session?.user || user
-    
-    if (!currentUser) {
-      console.error('No Supabase session or user found')
-      console.log('Session:', session)
-      console.log('User:', user)
-      
-      // Check for specific Supabase cookies
-      const sbAccessToken = cookieStore.get('sb-access-token')
-      const sbRefreshToken = cookieStore.get('sb-refresh-token')
-      console.log('Supabase cookies present:', {
-        'sb-access-token': !!sbAccessToken,
-        'sb-refresh-token': !!sbRefreshToken
-      })
-      
+      console.error('Session error:', sessionError)
       return NextResponse.json({ 
-        error: 'No Supabase session - please log in',
-        debug: {
-          hasSession: false,
-          hasUser: false,
-          cookies: allCookies.map(c => c.name)
-        }
+        error: 'Authentication error',
+        details: sessionError.message 
       }, { status: 401 })
     }
     
-    console.log(`Supabase user found: ${currentUser.email}`)
+    if (!session) {
+      console.error('No session found')
+      return NextResponse.json({ 
+        error: 'Not authenticated - please log in' 
+      }, { status: 401 })
+    }
+    
+    console.log(`Authenticated user: ${session.user.email}`)
     
     const { folderId, generateSummaries = false } = await request.json()
     console.log(`Folder ID: ${folderId}, Generate summaries: ${generateSummaries}`)
     
     // Get Google tokens from cookies
-    console.log('Checking Google tokens...')
+    const cookieStore = cookies()
     const tokensCookie = cookieStore.get('google_tokens')
     
     if (!tokensCookie) {
       console.error('No Google tokens cookie found')
-      return NextResponse.json({ error: 'Not authenticated with Google Drive - please link Google Drive first' }, { status: 401 })
+      return NextResponse.json({ 
+        error: 'Not authenticated with Google Drive - please link Google Drive first' 
+      }, { status: 401 })
     }
     
     let tokens
@@ -214,7 +188,9 @@ export async function POST(request: NextRequest) {
       console.log('Google tokens found, checking expiry...')
     } catch (e) {
       console.error('Failed to parse Google tokens:', e)
-      return NextResponse.json({ error: 'Invalid Google tokens - please re-link Google Drive' }, { status: 401 })
+      return NextResponse.json({ 
+        error: 'Invalid Google tokens - please re-link Google Drive' 
+      }, { status: 401 })
     }
     
     // Refresh token if needed
@@ -224,15 +200,18 @@ export async function POST(request: NextRequest) {
       console.log('Google access token is valid')
     } catch (error: any) {
       console.error('Token refresh failed:', error)
-      return NextResponse.json({ error: 'Google token refresh failed - please re-link Google Drive', details: error.message }, { status: 401 })
+      return NextResponse.json({ 
+        error: 'Google token refresh failed - please re-link Google Drive', 
+        details: error.message 
+      }, { status: 401 })
     }
     
-    // Get or create Drive source for the Supabase user
+    // Get or create Drive source for the user
     console.log('Getting Drive source for user...')
     const { data: source, error: sourceError } = await supabase
       .from('data_sources')
       .select('*')
-      .eq('user_id', currentUser.id)
+      .eq('user_id', session.user.id)
       .eq('type', 'drive')
       .single()
     
@@ -243,7 +222,7 @@ export async function POST(request: NextRequest) {
       const { data: newSource, error } = await supabase
         .from('data_sources')
         .insert({ 
-          user_id: currentUser.id,
+          user_id: session.user.id,
           name: 'Google Drive',
           type: 'drive'
         })
@@ -252,7 +231,10 @@ export async function POST(request: NextRequest) {
       
       if (error) {
         console.error('Error creating Drive source:', error)
-        return NextResponse.json({ error: 'Failed to create Drive source', details: error.message }, { status: 500 })
+        return NextResponse.json({ 
+          error: 'Failed to create Drive source', 
+          details: error.message 
+        }, { status: 500 })
       }
       
       sourceId = newSource?.id
@@ -334,7 +316,10 @@ export async function POST(request: NextRequest) {
       
       if (upsertError) {
         console.error('Error saving files to database:', upsertError)
-        return NextResponse.json({ error: 'Failed to save indexed files', details: upsertError.message }, { status: 500 })
+        return NextResponse.json({ 
+          error: 'Failed to save indexed files', 
+          details: upsertError.message 
+        }, { status: 500 })
       }
     }
     
@@ -395,13 +380,11 @@ export async function DELETE(request: NextRequest) {
   try {
     const supabase = createRouteHandlerClient({ cookies })
     
-    // Try both getSession and getUser
+    // Get session
     const { data: { session } } = await supabase.auth.getSession()
-    const { data: { user } } = await supabase.auth.getUser()
-    const currentUser = session?.user || user
     
-    if (!currentUser) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    if (!session) {
+      return NextResponse.json({ error: 'Not authenticated' }, { status: 401 })
     }
     
     const { folderId, clearAll } = await request.json()
@@ -410,7 +393,7 @@ export async function DELETE(request: NextRequest) {
     const { data: source } = await supabase
       .from('data_sources')
       .select('*')
-      .eq('user_id', currentUser.id)
+      .eq('user_id', session.user.id)
       .eq('type', 'drive')
       .single()
     

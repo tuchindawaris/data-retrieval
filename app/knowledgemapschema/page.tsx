@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { useAuth } from '@/contexts/AuthContext'
-import { supabase } from '@/lib/supabase'
+import { createClientComponentClient } from '@supabase/auth-helpers-nextjs'
 import { buildDriveKnowledgeMap } from '@/lib/drive-knowledge-builder'
 import { DriveKnowledgeMap } from '@/lib/knowledge-map-types'
 
@@ -13,6 +13,9 @@ export default function KnowledgeMapSchemaPage() {
   const [driveMap, setDriveMap] = useState<DriveKnowledgeMap | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  
+  // Use auth-helpers client for consistency
+  const supabase = createClientComponentClient()
 
   useEffect(() => {
     if (user) {
