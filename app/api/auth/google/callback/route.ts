@@ -6,15 +6,17 @@ export async function GET(request: NextRequest) {
   const code = searchParams.get('code')
   
   if (!code) {
-    return NextResponse.redirect(new URL('/', request.url))
+    console.error('No authorization code received')
+    return NextResponse.redirect(new URL('/knowledge-map', request.nextUrl.origin))
   }
   
   try {
+    // Exchange code for tokens
     const tokens = await getTokenFromCode(code)
+    console.log('Got tokens:', { access_token: !!tokens.access_token, refresh_token: !!tokens.refresh_token })
     
-    // In production, store tokens securely
-    // For now, we'll pass them to the client
-    const response = NextResponse.redirect(new URL('/', request.url))
+    // Store tokens in cookies (NOT tied to Supabase user)
+    const response = NextResponse.redirect(new URL('/knowledge-map', request.nextUrl.origin))
     response.cookies.set('google_tokens', JSON.stringify(tokens), {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
@@ -22,9 +24,12 @@ export async function GET(request: NextRequest) {
       maxAge: 60 * 60 * 24 * 7, // 7 days
     })
     
+    console.log('Tokens saved to cookies successfully')
+    
     return response
   } catch (error) {
-    console.error('OAuth error:', error)
-    return NextResponse.redirect(new URL('/', request.url))
+    console.error('OAuth callback error:', error)
+    // Even on error, redirect to knowledge-map
+    return NextResponse.redirect(new URL('/knowledge-map', request.nextUrl.origin))
   }
 }

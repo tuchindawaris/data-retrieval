@@ -61,6 +61,7 @@ export interface DriveStatistics {
   files: number
   spreadsheets: number
   documents: number
+  unsupportedFiles: number
   processedSpreadsheets: number
   filesWithSummaries: number
   filesWithFailedSummaries: number

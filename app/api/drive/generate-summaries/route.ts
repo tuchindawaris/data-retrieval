@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { supabaseAdmin } from '@/lib/supabase'
+import { createRouteHandlerClient } from '@supabase/auth-helpers-nextjs'
 import { cookies } from 'next/headers'
 import { generateSummaries } from '@/lib/summary-generator'
 import { extractDocumentText } from '@/lib/document-processor'
@@ -15,12 +15,51 @@ const DOCUMENT_MIME_TYPES = [
   'application/vnd.oasis.opendocument.text'
 ]
 
+async function refreshTokenIfNeeded(tokens: any, cookieStore: any) {
+  if (tokens.expiry_date && Date.now() >= tokens.expiry_date) {
+    console.log('Access token expired, attempting to refresh...')
+    
+    if (tokens.refresh_token) {
+      const oauth2Client = getOAuth2Client()
+      oauth2Client.setCredentials(tokens)
+      
+      try {
+        const { credentials } = await oauth2Client.refreshAccessToken()
+        
+        // Update stored tokens
+        cookieStore.set('google_tokens', JSON.stringify(credentials), {
+          httpOnly: true,
+          secure: process.env.NODE_ENV === 'production',
+          sameSite: 'lax',
+          maxAge: 60 * 60 * 24 * 7, // 7 days
+        })
+        
+        return credentials.access_token
+      } catch (error) {
+        console.error('Failed to refresh token:', error)
+        throw new Error('Failed to refresh Google token')
+      }
+    } else {
+      throw new Error('No refresh token available')
+    }
+  }
+  
+  return tokens.access_token
+}
+
 export async function POST(request: NextRequest) {
   const startTime = Date.now()
   console.log('\n========== GENERATE SUMMARIES REQUEST ==========')
   console.log(`Timestamp: ${new Date().toISOString()}`)
   
   try {
+    const supabase = createRouteHandlerClient({ cookies })
+    const { data: { session } } = await supabase.auth.getSession()
+    
+    if (!session) {
+      return NextResponse.json({ error: 'Not authenticated' }, { status: 401 })
+    }
+    
     // Check if OpenAI API key is configured
     if (!process.env.OPENAI_API_KEY) {
       console.error('✗ OpenAI API key not configured')
@@ -33,71 +72,64 @@ export async function POST(request: NextRequest) {
     const { folderId } = await request.json()
     console.log(`Folder ID: ${folderId || 'ALL FILES'}`)
     
-    // Get tokens
+    // Get tokens from cookies
     const cookieStore = cookies()
     const tokensCookie = cookieStore.get('google_tokens')
     if (!tokensCookie) {
       console.error('✗ No Google auth tokens found')
-      return NextResponse.json({ error: 'Not authenticated' }, { status: 401 })
+      return NextResponse.json({ error: 'Not authenticated with Google Drive' }, { status: 401 })
     }
     
     const tokens = JSON.parse(tokensCookie.value)
-    let accessToken = tokens.access_token
+    const accessToken = await refreshTokenIfNeeded(tokens, cookieStore)
     
-    // Check if token is expired and refresh if needed
-    if (tokens.expiry_date && Date.now() >= tokens.expiry_date) {
-      console.log('⚠️  Access token expired, attempting to refresh...')
-      
-      if (tokens.refresh_token) {
-        const oauth2Client = getOAuth2Client()
-        oauth2Client.setCredentials(tokens)
-        
-        try {
-          const { credentials } = await oauth2Client.refreshAccessToken()
-          accessToken = credentials.access_token!
-          
-          // Update stored tokens
-          const cookieStore = cookies()
-          cookieStore.set('google_tokens', JSON.stringify(credentials), {
-            httpOnly: true,
-            secure: process.env.NODE_ENV === 'production',
-            sameSite: 'lax',
-            maxAge: 60 * 60 * 24 * 7, // 7 days
-          })
-          
-          console.log('✓ Successfully refreshed access token')
-        } catch (error) {
-          console.error('✗ Failed to refresh token:', error)
-          return NextResponse.json({ error: 'Authentication expired. Please reconnect Google Drive.' }, { status: 401 })
-        }
-      } else {
-        console.error('✗ No refresh token available')
-        return NextResponse.json({ error: 'Authentication expired. Please reconnect Google Drive.' }, { status: 401 })
-      }
+    // Get user's Drive source
+    const { data: source } = await supabase
+      .from('data_sources')
+      .select('*')
+      .eq('user_id', session.user.id)
+      .eq('type', 'drive')
+      .single()
+    
+    if (!source) {
+      return NextResponse.json({ error: 'No Drive source found' }, { status: 404 })
     }
     
-    // Get files that need summaries
+    // Get files that need summaries - check both metadata and file_summaries
     console.log('\n--- Fetching files from database ---')
-    let query = supabaseAdmin
+    
+    // First get all files for this source
+    let query = supabase
       .from('file_metadata')
       .select('*')
-      .is('metadata->>summary', null) // Only files without summaries
+      .eq('source_id', source.id)
     
     if (folderId) {
       // If folderId provided, only process files in that folder
       query = query.or(`file_id.eq.${folderId},metadata->>parentFolderId.eq.${folderId}`)
     }
     
-    const { data: files, error } = await query
+    const { data: allFiles, error: filesError } = await query
     
-    if (error) {
-      console.error('✗ Database error:', error)
+    if (filesError) {
+      console.error('✗ Database error:', filesError)
       return NextResponse.json({ error: 'Failed to fetch files' }, { status: 500 })
     }
     
-    console.log(`Found ${files?.length || 0} files without summaries`)
+    // Get existing summaries
+    const { data: existingSummaries } = await supabase
+      .from('file_summaries')
+      .select('file_id')
+      .eq('source_id', source.id)
     
-    if (!files || files.length === 0) {
+    const summaryFileIds = new Set(existingSummaries?.map(s => s.file_id) || [])
+    
+    // Filter files that don't have summaries
+    const files = allFiles?.filter(file => !summaryFileIds.has(file.file_id)) || []
+    
+    console.log(`Found ${files.length} files without summaries`)
+    
+    if (files.length === 0) {
       console.log('✓ No files need summaries')
       return NextResponse.json({ 
         message: 'No files need summaries',
@@ -160,7 +192,8 @@ export async function POST(request: NextRequest) {
           console.error(`  ✗ Error extracting text from ${file.name}:`, error.message)
         }
       } else {
-        skippedFiles.push({ name: file.name, reason: 'unsupported file type' })
+        // Not a spreadsheet or document - it's an unsupported file type
+        skippedFiles.push({ name: file.name, reason: 'not a supported file type (only spreadsheets and documents are supported)' })
       }
       
       if (content) {
@@ -226,67 +259,30 @@ export async function POST(request: NextRequest) {
     console.log(`Total failures: ${allFailures.length}`)
     console.log(`Total tokens used: ${totalTokensUsed}`)
     
-    // Update metadata with summaries
-    console.log('\n--- Updating database with summaries ---')
-    let updatedCount = 0
-    let updateErrors = []
+    // Save summaries to database
+    console.log('\n--- Saving summaries to database ---')
+    let savedCount = 0
+    let saveErrors = []
     
     for (const summary of allSummaries) {
-      const file = files.find(f => f.file_id === summary.fileId)
-      if (!file) {
-        console.error(`✗ Could not find file for summary: ${summary.fileId}`)
-        continue
-      }
+      const { error } = await supabase
+        .from('file_summaries')
+        .insert({
+          source_id: source.id,
+          file_id: summary.fileId,
+          summary: summary.summary,
+          sheet_summaries: summary.sheetSummaries || null,
+          summary_tokens: Math.ceil(summary.summary.length / 4), // Rough estimate
+          generated_at: new Date().toISOString()
+        })
       
-      const updatedMetadata = { ...file.metadata }
-      updatedMetadata.summary = summary.summary
-      updatedMetadata.summaryGeneratedAt = new Date().toISOString()
-      updatedMetadata.summaryStatus = 'success'
-      updatedMetadata.summaryError = null
-      
-      // Add sheet summaries if applicable
-      if (summary.sheetSummaries && updatedMetadata.sheets) {
-        updatedMetadata.sheets = updatedMetadata.sheets.map((sheet: any) => ({
-          ...sheet,
-          summary: summary.sheetSummaries![sheet.name] || null,
-          summaryStatus: summary.sheetSummaries![sheet.name] ? 'success' : 'missing'
-        }))
-        
-        // Log any missing sheet summaries
-        const missingSheetsCount = updatedMetadata.sheets.filter((s: any) => !s.summary).length
-        if (missingSheetsCount > 0) {
-          console.log(`  ⚠️  ${file.name}: ${missingSheetsCount} sheets missing summaries`)
-        }
-      }
-      
-      const { error: updateError } = await supabaseAdmin
-        .from('file_metadata')
-        .update({ metadata: updatedMetadata })
-        .eq('id', file.id)
-      
-      if (!updateError) {
-        updatedCount++
-        console.log(`  ✓ Updated: ${file.name}`)
+      if (!error) {
+        savedCount++
+        console.log(`  ✓ Saved summary for: ${summary.fileId}`)
       } else {
-        updateErrors.push({ fileName: file.name, error: updateError })
-        console.error(`  ✗ Failed to update ${file.name}:`, updateError)
+        saveErrors.push({ fileId: summary.fileId, error })
+        console.error(`  ✗ Failed to save summary for ${summary.fileId}:`, error)
       }
-    }
-    
-    // Mark failed files in metadata
-    for (const failure of allFailures) {
-      const file = files.find(f => f.file_id === failure.fileId)
-      if (!file) continue
-      
-      const updatedMetadata = { ...file.metadata }
-      updatedMetadata.summaryStatus = 'failed'
-      updatedMetadata.summaryError = failure.reason
-      updatedMetadata.summaryAttemptedAt = new Date().toISOString()
-      
-      await supabaseAdmin
-        .from('file_metadata')
-        .update({ metadata: updatedMetadata })
-        .eq('id', file.id)
     }
     
     // Final summary
@@ -295,16 +291,16 @@ export async function POST(request: NextRequest) {
     console.log(`Duration: ${duration}ms`)
     console.log(`Files processed: ${filesToSummarize.length}`)
     console.log(`Summaries generated: ${allSummaries.length}`)
-    console.log(`Database updates: ${updatedCount}`)
+    console.log(`Summaries saved: ${savedCount}`)
     console.log(`Failed summaries: ${allFailures.length}`)
-    console.log(`Update errors: ${updateErrors.length}`)
+    console.log(`Save errors: ${saveErrors.length}`)
     console.log(`Skipped files: ${skippedFiles.length}`)
     console.log(`Total tokens used: ${totalTokensUsed}`)
     
     return NextResponse.json({ 
       success: true,
       processed: filesToSummarize.length,
-      updated: updatedCount,
+      updated: savedCount,
       failed: allFailures.length,
       skipped: skippedFiles.length,
       tokensUsed: totalTokensUsed,

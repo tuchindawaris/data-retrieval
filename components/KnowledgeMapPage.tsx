@@ -1,8 +1,12 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { supabase } from '@/lib/supabase'
-import type { DataSource, FileMetadata, SchemaMetadata } from '@/lib/supabase'
+import { createClientComponentClient } from '@supabase/auth-helpers-nextjs'
+import { useAuth } from '@/contexts/AuthContext'
+import GoogleAccountStatus from '@/components/GoogleAccountStatus'
+import SemanticSearch from '@/components/SemanticSearch'
+import type { DataSource, FileMetadata } from '@/lib/supabase'
+
 
 // File type groupings for uniform parsing
 const FILE_GROUPS = {
@@ -32,51 +36,11 @@ const FILE_GROUPS = {
       'application/vnd.oasis.opendocument.text'
     ]
   },
-  code: {
-    color: '#8b5cf6', // purple
-    label: 'Code/Scripts',
-    extensions: ['js', 'ts', 'jsx', 'tsx', 'py', 'java', 'cpp', 'c', 'h', 'go', 'rs', 'php', 'rb', 'swift', 'kt', 'json', 'xml', 'yaml', 'yml', 'html', 'css', 'sql'],
-    mimeTypes: [
-      'text/javascript',
-      'application/javascript',
-      'application/json',
-      'text/xml',
-      'application/xml',
-      'text/html',
-      'text/css'
-    ]
-  },
-  archive: {
-    color: '#f97316', // orange
-    label: 'Archives',
-    extensions: ['zip', 'tar', 'gz', 'rar', '7z'],
-    mimeTypes: [
-      'application/zip',
-      'application/x-zip-compressed',
-      'application/x-tar',
-      'application/gzip',
-      'application/x-rar-compressed',
-      'application/x-7z-compressed'
-    ]
-  },
-  future: {
+  unsupported: {
     color: '#6b7280', // gray
-    label: 'Future Implementation',
-    extensions: ['pdf', 'ppt', 'pptx', 'jpg', 'jpeg', 'png', 'gif', 'bmp', 'svg', 'webp', 'mp4', 'avi', 'mov', 'mp3', 'wav'],
-    mimeTypes: [
-      'application/pdf',
-      'application/vnd.ms-powerpoint',
-      'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-      'application/vnd.google-apps.presentation',
-      'image/jpeg',
-      'image/png',
-      'image/gif',
-      'image/svg+xml',
-      'image/webp',
-      'video/mp4',
-      'audio/mpeg',
-      'audio/wav'
-    ]
+    label: 'Not Supported Yet',
+    extensions: [], // All other extensions
+    mimeTypes: [] // All other mime types
   }
 }
 
@@ -134,29 +98,33 @@ function buildFolderTree(files: FileMetadata[]): FolderNode[] {
 function getFileGroup(mimeType: string, fileName: string) {
   const extension = fileName.split('.').pop()?.toLowerCase() || ''
   
-  for (const [groupKey, group] of Object.entries(FILE_GROUPS)) {
-    if (group.mimeTypes.includes(mimeType) || group.extensions.includes(extension)) {
-      return { key: groupKey, ...group }
-    }
+  // Check if it's a spreadsheet
+  if (FILE_GROUPS.spreadsheet.mimeTypes.includes(mimeType) || 
+      FILE_GROUPS.spreadsheet.extensions.includes(extension)) {
+    return { key: 'spreadsheet', ...FILE_GROUPS.spreadsheet }
   }
   
-  return { key: 'future', ...FILE_GROUPS.future }
+  // Check if it's a document
+  if (FILE_GROUPS.document.mimeTypes.includes(mimeType) || 
+      FILE_GROUPS.document.extensions.includes(extension)) {
+    return { key: 'document', ...FILE_GROUPS.document }
+  }
+  
+  // Everything else is unsupported
+  return { key: 'unsupported', ...FILE_GROUPS.unsupported }
 }
 
 export default function KnowledgeMapPage() {
-  const [activeTab, setActiveTab] = useState<'sql' | 'drive'>('drive')
+  const { user } = useAuth()
+  const [activeTab, setActiveTab] = useState<'sql' | 'drive' | 'search'>('drive')
   const [loading, setLoading] = useState(true)
   const [syncing, setSyncing] = useState(false)
   const [indexing, setIndexing] = useState(false)
-  const [driveToken, setDriveToken] = useState<string | null>(null)
+  const [hasGoogleAuth, setHasGoogleAuth] = useState<boolean | null>(null)
   const [folderUrl, setFolderUrl] = useState('')
   const [deletingFolder, setDeletingFolder] = useState<string | null>(null)
   const [clearingAll, setClearingAll] = useState(false)
   const [generateSummariesOnIndex, setGenerateSummariesOnIndex] = useState(false)
-  
-  // SQL data
-  const [tables, setTables] = useState<Map<string, Set<string>>>(new Map())
-  const [sqlSource, setSqlSource] = useState<DataSource | null>(null)
   
   // Drive data
   const [files, setFiles] = useState<FileMetadata[]>([])
@@ -165,11 +133,29 @@ export default function KnowledgeMapPage() {
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set())
   const [expandedSpreadsheets, setExpandedSpreadsheets] = useState<Set<string>>(new Set())
   const [generatingSummaries, setGeneratingSummaries] = useState(false)
+  const [fileSummaries, setFileSummaries] = useState<Map<string, any>>(new Map())
+  
+  // New states for embeddings
+  const [generatingEmbeddings, setGeneratingEmbeddings] = useState(false)
+  const [embeddingStats, setEmbeddingStats] = useState<{
+    totalDocuments: number
+    embeddedDocuments: number
+  } | null>(null)
+  
+  // Use auth-helpers client for consistency
+  const supabase = createClientComponentClient()
 
   useEffect(() => {
-    loadData()
-    checkAuth()
-  }, [])
+    if (user) {
+      checkAuth()
+    }
+  }, [user])
+
+  useEffect(() => {
+    if (user && hasGoogleAuth !== null) {
+      loadData()
+    }
+  }, [user, hasGoogleAuth])
 
   useEffect(() => {
     // Build folder tree when files change
@@ -178,86 +164,128 @@ export default function KnowledgeMapPage() {
   }, [files])
 
   async function checkAuth() {
-    const res = await fetch('/api/auth/check')
+    const res = await fetch('/api/auth/check', {
+      credentials: 'include' // IMPORTANT: Include cookies
+    })
     const data = await res.json()
-    if (data.authenticated) {
-      setDriveToken(data.token)
-    }
+    setHasGoogleAuth(data.authenticated)
   }
 
   async function loadData() {
+    if (!user) return
+    
     setLoading(true)
     
-    // Load data sources
-    const { data: sources } = await supabase
+    // Only load Drive data if authenticated with Google
+    if (!hasGoogleAuth) {
+      setDriveSource(null)
+      setFiles([])
+      setFileSummaries(new Map())
+      setLoading(false)
+      return
+    }
+    
+    // Get user's Drive source
+    const { data: source } = await supabase
       .from('data_sources')
       .select('*')
+      .eq('user_id', user.id)
+      .eq('type', 'drive')
+      .single()
     
-    setSqlSource(sources?.find(s => s.type === 'sql') || null)
-    setDriveSource(sources?.find(s => s.type === 'drive') || null)
+    if (!source) {
+      setDriveSource(null)
+      setFiles([])
+      setLoading(false)
+      return
+    }
     
-    // Load SQL schema
-    const { data: schemas } = await supabase
-      .from('schema_metadata')
-      .select('*')
-    
-    const tableMap = new Map<string, Set<string>>()
-    schemas?.forEach(schema => {
-      if (!tableMap.has(schema.table_name)) {
-        tableMap.set(schema.table_name, new Set())
-      }
-      tableMap.get(schema.table_name)?.add(schema.column_name)
-    })
-    setTables(tableMap)
+    setDriveSource(source)
     
     // Load Drive files
     const { data: driveFiles } = await supabase
       .from('file_metadata')
       .select('*')
+      .eq('source_id', source.id)
       .order('name')
     
     setFiles(driveFiles || [])
+    
+    // Load summaries
+    const { data: summaries } = await supabase
+      .from('file_summaries')
+      .select('*')
+      .eq('source_id', source.id)
+    
+    const summaryMap = new Map()
+    summaries?.forEach(s => {
+      summaryMap.set(s.file_id, s)
+    })
+    setFileSummaries(summaryMap)
+    
+    // Load embedding stats
+    await loadEmbeddingStats(source.id)
+    
     setLoading(false)
   }
 
+  async function loadEmbeddingStats(sourceId: string) {
+    // Count total documents
+    const { count: totalDocs } = await supabase
+      .from('file_metadata')
+      .select('*', { count: 'exact', head: true })
+      .eq('source_id', sourceId)
+      .or('metadata->isDocument.eq.true,mime_type.in.(text/plain,text/markdown,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.google-apps.document,application/rtf,application/vnd.oasis.opendocument.text)')
+    
+    // Count embedded documents
+    const { data: embeddedDocs } = await supabase
+      .from('document_embeddings')
+      .select('file_id', { count: 'exact' })
+      .eq('source_id', sourceId)
+    
+    const uniqueEmbeddedDocs = new Set(embeddedDocs?.map(d => d.file_id) || [])
+    
+    setEmbeddingStats({
+      totalDocuments: totalDocs || 0,
+      embeddedDocuments: uniqueEmbeddedDocs.size
+    })
+  }
+
   async function handleResync() {
-    if (activeTab === 'drive' && folderTree.length > 0) {
-      if (!confirm('Resync all folders with the latest files from Google Drive?')) {
-        return
-      }
+    if (folderTree.length === 0) {
+      await loadData()
+      return
+    }
+    
+    if (!confirm('Resync all folders with the latest files from Google Drive?')) {
+      return
     }
     
     setSyncing(true)
     
-    if (activeTab === 'drive' && driveToken) {
-      // Resync all root folders
-      try {
-        for (const folder of folderTree) {
-          const response = await fetch('/api/drive/index', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ folderId: folder.id }),
-          })
-          
-          if (!response.ok) {
-            console.error(`Failed to resync folder: ${folder.name}`)
-          }
+    try {
+      for (const folder of folderTree) {
+        const response = await fetch('/api/drive/index', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include', // IMPORTANT: Include cookies
+          body: JSON.stringify({ folderId: folder.id }),
+        })
+        
+        if (!response.ok) {
+          console.error(`Failed to resync folder: ${folder.name}`)
         }
-      } catch (error) {
-        console.error('Error resyncing folders:', error)
       }
+    } catch (error) {
+      console.error('Error resyncing folders:', error)
     }
     
     await loadData()
     setSyncing(false)
   }
 
-  async function linkGoogleDrive() {
-    window.location.href = '/api/auth/google'
-  }
-
   async function indexDriveFolder() {
-    if (!folderUrl || !driveToken) return
+    if (!folderUrl || !hasGoogleAuth) return
     
     const match = folderUrl.match(/\/folders\/([a-zA-Z0-9-_]+)/)
     const folderId = match ? match[1] : 'root'
@@ -279,6 +307,7 @@ export default function KnowledgeMapPage() {
       const response = await fetch('/api/drive/index', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'include', // IMPORTANT: Include cookies
         body: JSON.stringify({ 
           folderId,
           generateSummaries: generateSummariesOnIndex 
@@ -301,10 +330,12 @@ export default function KnowledgeMapPage() {
         alert(message)
         console.log('Folder indexing complete:', data)
       } else {
-        alert('Failed to index folder')
+        alert(`Failed to index folder: ${data.error || 'Unknown error'}`)
+        console.error('Index error:', data)
       }
     } catch (error) {
       alert('Error indexing folder')
+      console.error('Error:', error)
     } finally {
       setIndexing(false)
     }
@@ -321,6 +352,7 @@ export default function KnowledgeMapPage() {
       const response = await fetch('/api/drive/index', {
         method: 'DELETE',
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'include', // IMPORTANT: Include cookies
         body: JSON.stringify({ folderId }),
       })
       
@@ -347,6 +379,7 @@ export default function KnowledgeMapPage() {
       const response = await fetch('/api/drive/index', {
         method: 'DELETE',
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'include', // IMPORTANT: Include cookies
         body: JSON.stringify({ clearAll: true }),
       })
       
@@ -397,6 +430,7 @@ export default function KnowledgeMapPage() {
       const response = await fetch('/api/drive/index', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'include', // IMPORTANT: Include cookies
         body: JSON.stringify({ 
           folderId,
           generateSummaries: generateSummariesOnIndex 
@@ -408,28 +442,15 @@ export default function KnowledgeMapPage() {
       if (response.ok) {
         await loadData()
         
-        if (data.resynced) {
-          let message = `Folder resynced successfully!\n`
-          message += `- Files updated: ${data.indexed}\n`
-          
-          if (data.summariesGenerated !== undefined && data.summariesGenerated > 0) {
-            message += `- Summaries generated: ${data.summariesGenerated}`
-          }
-          
-          alert(message)
-          console.log('Folder resync complete:', data)
-        } else {
-          // This is a new folder indexing
-          let message = `Folder indexed successfully!\n`
-          message += `- Files indexed: ${data.indexed}\n`
-          
-          if (generateSummariesOnIndex && data.summariesGenerated !== undefined) {
-            message += `- Summaries generated: ${data.summariesGenerated}`
-          }
-          
-          alert(message)
-          console.log('New folder indexing complete:', data)
+        let message = data.resynced ? 'Folder resynced successfully!\n' : 'Folder indexed successfully!\n'
+        message += `- Files updated: ${data.indexed}\n`
+        
+        if (data.summariesGenerated !== undefined && data.summariesGenerated > 0) {
+          message += `- Summaries generated: ${data.summariesGenerated}`
         }
+        
+        alert(message)
+        console.log('Folder operation complete:', data)
       } else {
         alert('Failed to resync folder')
       }
@@ -452,6 +473,7 @@ export default function KnowledgeMapPage() {
       const response = await fetch('/api/drive/generate-summaries', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'include', // IMPORTANT: Include cookies
         body: JSON.stringify({}), // Process all files
       })
       
@@ -478,6 +500,52 @@ export default function KnowledgeMapPage() {
       console.error('Error:', error)
     } finally {
       setGeneratingSummaries(false)
+    }
+  }
+
+  async function generateEmbeddingsForDocuments() {
+    const confirmMessage = embeddingStats && embeddingStats.embeddedDocuments > 0
+      ? `Generate embeddings for documents? ${embeddingStats.embeddedDocuments}/${embeddingStats.totalDocuments} documents already have embeddings. This will use your OpenAI API quota.`
+      : 'Generate embeddings for all documents? This will use your OpenAI API quota.'
+      
+    if (!confirm(confirmMessage)) {
+      return
+    }
+    
+    setGeneratingEmbeddings(true)
+    console.log('Starting embedding generation...')
+    
+    try {
+      const response = await fetch('/api/drive/generate-embeddings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ forceRegenerate: false }),
+      })
+      
+      const data = await response.json()
+      
+      if (response.ok) {
+        await loadData()
+        let message = `Successfully generated embeddings!\n`
+        message += `- Documents processed: ${data.processed}\n`
+        message += `- Documents embedded: ${data.embedded}\n`
+        message += `- Total chunks: ${data.totalChunks || 0}\n`
+        message += `- Failed: ${data.failed}\n`
+        message += `- Tokens used: ${data.tokensUsed || 0}\n`
+        message += `- Duration: ${(data.duration / 1000).toFixed(1)}s`
+        
+        alert(message)
+        console.log('Embedding generation complete:', data)
+      } else {
+        alert(`Failed to generate embeddings: ${data.error || 'Unknown error'}`)
+        console.error('Embedding generation failed:', data)
+      }
+    } catch (error) {
+      alert('Error generating embeddings')
+      console.error('Error:', error)
+    } finally {
+      setGeneratingEmbeddings(false)
     }
   }
 
@@ -538,6 +606,7 @@ export default function KnowledgeMapPage() {
               const group = getFileGroup(file.mime_type, file.name)
               const isSpreadsheet = file.metadata?.isSpreadsheet
               const isExpandedSpreadsheet = expandedSpreadsheets.has(file.file_id)
+              const summary = fileSummaries.get(file.file_id)
               
               return (
                 <div key={file.id}>
@@ -556,19 +625,17 @@ export default function KnowledgeMapPage() {
                       style={{ backgroundColor: group.color }}
                     />
                     <span className="text-sm text-gray-700">{file.name}</span>
+                    {group.key === 'unsupported' && (
+                      <span className="text-xs text-gray-500 italic ml-2">(not supported yet)</span>
+                    )}
                     {isSpreadsheet && file.metadata?.sheets && (
                       <span className="text-xs text-gray-500">
                         ({file.metadata.sheets.length} sheets)
                       </span>
                     )}
-                    {file.metadata?.summary && (
-                      <span className="text-xs text-gray-600 italic ml-2" title={file.metadata.summary}>
-                        "{file.metadata.summary.length > 60 ? file.metadata.summary.substring(0, 60) + '...' : file.metadata.summary}"
-                      </span>
-                    )}
-                    {file.metadata?.summaryStatus === 'failed' && (
-                      <span className="text-xs text-red-600 ml-2" title={file.metadata.summaryError}>
-                        ⚠️ Summary failed
+                    {summary?.summary && (
+                      <span className="text-xs text-gray-600 italic ml-2" title={summary.summary}>
+                        "{summary.summary.length > 60 ? summary.summary.substring(0, 60) + '...' : summary.summary}"
                       </span>
                     )}
                     <span className="text-xs text-gray-500 ml-auto">
@@ -591,15 +658,10 @@ export default function KnowledgeMapPage() {
                             </span>
                           </div>
                           
-                          {/* Sheet summary */}
-                          {sheet.summary && (
+                          {/* Sheet summary from file_summaries table */}
+                          {summary?.sheet_summaries?.[sheet.name] && (
                             <div className="ml-6 text-xs text-gray-600 italic">
-                              "{sheet.summary}"
-                            </div>
-                          )}
-                          {sheet.summaryStatus === 'missing' && (
-                            <div className="ml-6 text-xs text-orange-600">
-                              ⚠️ Summary missing for this sheet
+                              "{summary.sheet_summaries[sheet.name]}"
                             </div>
                           )}
                           
@@ -636,14 +698,30 @@ export default function KnowledgeMapPage() {
 
   return (
     <div className="min-h-screen bg-gray-50">
-      <header className="bg-white shadow-sm border-b">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex justify-between items-center h-16">
-            <h1 className="text-xl font-semibold">Knowledge Map</h1>
-            
-            <div className="flex items-center gap-4">
-              {activeTab === 'drive' && driveToken && files.length > 0 && (
+      {/* Google Account Status */}
+      <GoogleAccountStatus />
+
+      {/* Secondary Header with Actions */}
+      <div className="bg-white border-b">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
+          <div className="flex justify-between items-center">
+            <h2 className="text-lg font-medium">Knowledge Map</h2>
+            <div className="flex items-center gap-3">
+              {activeTab === 'drive' && hasGoogleAuth && files.length > 0 && (
                 <>
+                  <button
+                    onClick={generateEmbeddingsForDocuments}
+                    disabled={generatingEmbeddings}
+                    className="bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-400 text-white px-4 py-2 rounded-md text-sm font-medium transition-colors"
+                  >
+                    {generatingEmbeddings ? 'Generating...' : 'Generate Embeddings'}
+                    {embeddingStats && (
+                      <span className="ml-2 text-xs opacity-80">
+                        ({embeddingStats.embeddedDocuments}/{embeddingStats.totalDocuments})
+                      </span>
+                    )}
+                  </button>
+                  
                   <button
                     onClick={generateSummariesForFiles}
                     disabled={generatingSummaries}
@@ -662,41 +740,28 @@ export default function KnowledgeMapPage() {
                 </>
               )}
               
-              {activeTab === 'drive' && !driveToken && (
-                <button
-                  onClick={linkGoogleDrive}
-                  className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-md text-sm transition-colors"
-                >
-                  Link Google Drive
-                </button>
-              )}
-              
               <button
                 onClick={handleResync}
                 disabled={syncing}
                 className="bg-gray-600 hover:bg-gray-700 disabled:bg-gray-400 text-white px-4 py-2 rounded-md text-sm transition-colors"
                 title={activeTab === 'drive' ? 'Resync all folders with Google Drive' : 'Reload data'}
               >
-                {syncing ? 'Syncing...' : activeTab === 'drive' && folderTree.length > 0 ? 'Resync All' : 'Refresh'}
+                {syncing ? 'Syncing...' : folderTree.length > 0 ? 'Resync All' : 'Refresh'}
               </button>
             </div>
           </div>
         </div>
-      </header>
+      </div>
 
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
         {/* Tabs */}
         <div className="border-b border-gray-200 mb-6">
           <nav className="-mb-px flex space-x-8">
             <button
-              onClick={() => setActiveTab('sql')}
-              className={`py-2 px-1 border-b-2 font-medium text-sm ${
-                activeTab === 'sql'
-                  ? 'border-blue-500 text-blue-600'
-                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-              }`}
+              disabled={true}
+              className="py-2 px-1 border-b-2 font-medium text-sm border-transparent text-gray-300 cursor-not-allowed"
             >
-              SQL Database
+              SQL Database (Coming Soon)
             </button>
             <button
               onClick={() => setActiveTab('drive')}
@@ -707,6 +772,16 @@ export default function KnowledgeMapPage() {
               }`}
             >
               Google Drive
+            </button>
+            <button
+              onClick={() => setActiveTab('search')}
+              className={`py-2 px-1 border-b-2 font-medium text-sm ${
+                activeTab === 'search'
+                  ? 'border-blue-500 text-blue-600'
+                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+              }`}
+            >
+              🔍 Search Documents
             </button>
           </nav>
         </div>
@@ -719,31 +794,45 @@ export default function KnowledgeMapPage() {
           <>
             {/* SQL View */}
             {activeTab === 'sql' && (
+              <div className="text-center py-12 text-gray-500">
+                <div className="mb-4">
+                  <svg className="w-16 h-16 mx-auto text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4m0 5c0 2.21-3.582 4-8 4s-8-1.79-8-4" />
+                  </svg>
+                </div>
+                <h3 className="text-lg font-medium mb-2">Database Connection Coming Soon</h3>
+                <p>Connect to your PostgreSQL, MySQL, or other databases to query with natural language.</p>
+              </div>
+            )}
+
+            {/* Search View */}
+            {activeTab === 'search' && (
               <div>
-                {sqlSource ? (
-                  <div>
-                    <h2 className="text-lg font-medium mb-4">Database Tables</h2>
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                      {Array.from(tables.entries()).map(([tableName, columns]) => (
-                        <div
-                          key={tableName}
-                          className="bg-white rounded-lg shadow-sm border border-gray-200 p-4"
-                        >
-                          <h3 className="font-medium text-gray-900 mb-2">{tableName}</h3>
-                          <div className="text-sm text-gray-600">
-                            <p className="mb-1">{columns.size} columns</p>
-                            <p className="text-xs">
-                              {Array.from(columns).slice(0, 3).join(', ')}
-                              {columns.size > 3 && '...'}
-                            </p>
-                          </div>
-                        </div>
-                      ))}
+                {hasGoogleAuth ? (
+                  embeddingStats && embeddingStats.embeddedDocuments > 0 ? (
+                    <SemanticSearch />
+                  ) : (
+                    <div className="text-center py-12">
+                      <svg className="w-16 h-16 mx-auto text-gray-300 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
+                      </svg>
+                      <h3 className="text-lg font-medium text-gray-900 mb-2">No Document Embeddings Yet</h3>
+                      <p className="text-gray-500 mb-4">Generate embeddings for your documents to enable semantic search</p>
+                      <button
+                        onClick={() => setActiveTab('drive')}
+                        className="text-blue-600 hover:text-blue-800"
+                      >
+                        Go to Drive tab to generate embeddings
+                      </button>
                     </div>
-                  </div>
+                  )
                 ) : (
-                  <div className="text-center py-12 text-gray-500">
-                    No SQL database connected
+                  <div className="text-center py-12">
+                    <svg className="w-16 h-16 mx-auto text-gray-300 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+                    </svg>
+                    <h3 className="text-lg font-medium text-gray-900 mb-2">Google Drive Not Connected</h3>
+                    <p className="text-gray-500 mb-4">Connect your Google Drive account to search documents</p>
                   </div>
                 )}
               </div>
@@ -752,7 +841,7 @@ export default function KnowledgeMapPage() {
             {/* Drive View */}
             {activeTab === 'drive' && (
               <div>
-                {driveToken && (
+                {hasGoogleAuth && (
                   <div className="mb-6">
                     <div className="flex gap-2 mb-2">
                       <input
@@ -783,39 +872,81 @@ export default function KnowledgeMapPage() {
                 )}
 
                 {/* Folder Tree */}
-                {(folderTree.length > 0 || files.some(f => !f.metadata?.isFolder)) ? (
-                  <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
-                    <h3 className="font-medium text-gray-900 mb-4">Imported Folders</h3>
-                    {folderTree.map(node => renderFolderNode(node))}
-                    
-                    {/* Files not in any folder */}
-                    {files.filter(f => !f.metadata?.isFolder && !f.metadata?.parentFolderId).length > 0 && (
-                      <div className="mt-4 pt-4 border-t">
-                        <h4 className="text-sm font-medium text-gray-700 mb-2">Loose Files</h4>
-                        {files.filter(f => !f.metadata?.isFolder && !f.metadata?.parentFolderId).map(file => {
-                          const group = getFileGroup(file.mime_type, file.name)
-                          return (
-                            <div
-                              key={file.id}
-                              className="flex items-center gap-2 p-2 hover:bg-gray-50 rounded"
-                            >
-                              <div
-                                className="w-3 h-3 rounded-sm"
-                                style={{ backgroundColor: group.color }}
-                              />
-                              <span className="text-sm text-gray-700">{file.name}</span>
-                              <span className="text-xs text-gray-500 ml-auto">
-                                {(file.size / 1024).toFixed(1)} KB
-                              </span>
-                            </div>
-                          )
-                        })}
+                {hasGoogleAuth ? (
+                  (folderTree.length > 0 || files.some(f => !f.metadata?.isFolder)) ? (
+                    <div>
+                      {/* File Type Legend */}
+                      <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4 mb-4">
+                        <h4 className="text-sm font-medium text-gray-900 mb-3">File Type Support</h4>
+                        <div className="flex flex-wrap gap-4 text-sm">
+                          <div className="flex items-center gap-2">
+                            <div className="w-3 h-3 rounded-sm bg-green-500"></div>
+                            <span>Spreadsheets (Supported)</span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <div className="w-3 h-3 rounded-sm bg-blue-500"></div>
+                            <span>Documents (Supported)</span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <div className="w-3 h-3 rounded-sm bg-gray-500"></div>
+                            <span>Other Files (Not Supported Yet)</span>
+                          </div>
+                        </div>
                       </div>
-                    )}
-                  </div>
+                      
+                      {/* Folder Tree */}
+                      <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
+                        <h3 className="font-medium text-gray-900 mb-4">Imported Folders</h3>
+                        {folderTree.map(node => renderFolderNode(node))}
+                      
+                      {/* Files not in any folder */}
+                      {files.filter(f => !f.metadata?.isFolder && !f.metadata?.parentFolderId).length > 0 && (
+                        <div className="mt-4 pt-4 border-t">
+                          <h4 className="text-sm font-medium text-gray-700 mb-2">Loose Files</h4>
+                          {files.filter(f => !f.metadata?.isFolder && !f.metadata?.parentFolderId).map(file => {
+                            const group = getFileGroup(file.mime_type, file.name)
+                            const summary = fileSummaries.get(file.file_id)
+                            
+                            return (
+                              <div
+                                key={file.id}
+                                className="flex items-center gap-2 p-2 hover:bg-gray-50 rounded"
+                              >
+                                <div
+                                  className="w-3 h-3 rounded-sm"
+                                  style={{ backgroundColor: group.color }}
+                                />
+                                <span className="text-sm text-gray-700">{file.name}</span>
+                                {group.key === 'unsupported' && (
+                                  <span className="text-xs text-gray-500 italic ml-2">(not supported yet)</span>
+                                )}
+                                {summary?.summary && (
+                                  <span className="text-xs text-gray-600 italic ml-2" title={summary.summary}>
+                                    "{summary.summary.length > 60 ? summary.summary.substring(0, 60) + '...' : summary.summary}"
+                                  </span>
+                                )}
+                                <span className="text-xs text-gray-500 ml-auto">
+                                  {(file.size / 1024).toFixed(1)} KB
+                                </span>
+                              </div>
+                            )
+                          })}
+                        </div>
+                      )}
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="text-center py-12 text-gray-500">
+                      No files indexed yet
+                    </div>
+                  )
                 ) : (
-                  <div className="text-center py-12 text-gray-500">
-                    {driveToken ? 'No files indexed yet' : 'Please link your Google Drive'}
+                  <div className="text-center py-12">
+                    <svg className="w-16 h-16 mx-auto text-gray-300 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+                    </svg>
+                    <h3 className="text-lg font-medium text-gray-900 mb-2">Google Drive Not Connected</h3>
+                    <p className="text-gray-500 mb-4">Connect your Google Drive account to view and manage your files</p>
                   </div>
                 )}
               </div>

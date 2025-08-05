@@ -1,29 +1,28 @@
-import { createClient } from '@supabase/supabase-js'
+/**
+ * @deprecated Do not use this file for authentication
+ * 
+ * Use these instead:
+ * - Client Components: createClientComponentClient from @supabase/auth-helpers-nextjs
+ * - Server Components: createServerComponentClient from @supabase/auth-helpers-nextjs  
+ * - Route Handlers: createRouteHandlerClient from @supabase/auth-helpers-nextjs
+ * - Middleware: createMiddlewareClient from @supabase/auth-helpers-nextjs
+ * 
+ * These auth-helpers ensure consistent cookie handling between client and server.
+ */
 
-// Debug: Check if environment variables are loaded
-console.log('Supabase URL:', process.env.NEXT_PUBLIC_SUPABASE_URL)
-console.log('Supabase Anon Key:', process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY)
-console.log('Supabase Service Key exists:', !!process.env.SUPABASE_SERVICE_ROLE_KEY)
+import { createClient } from '@supabase/supabase-js'
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
-const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY
 
-// Check if the required keys exist before creating clients
-if (!supabaseUrl || !supabaseAnonKey) {
-  console.error('Missing required Supabase environment variables')
-  console.error('NEXT_PUBLIC_SUPABASE_URL:', supabaseUrl)
-  console.error('NEXT_PUBLIC_SUPABASE_ANON_KEY:', supabaseAnonKey)
-  throw new Error('Missing required Supabase environment variables. Please check your .env.local file.')
-}
+// This client should NOT be used for authentication
+// Only use for non-authenticated operations if needed
+export const supabase = createClient(
+  supabaseUrl || 'https://placeholder.supabase.co',
+  supabaseAnonKey || 'placeholder-key'
+)
 
-export const supabase = createClient(supabaseUrl, supabaseAnonKey)
-
-// Only create admin client if service key exists
-export const supabaseAdmin = supabaseServiceKey 
-  ? createClient(supabaseUrl, supabaseServiceKey)
-  : null as any
-
+// Type definitions (these can still be used)
 export type DataSource = {
   id: string
   name: string
@@ -31,6 +30,7 @@ export type DataSource = {
   connection_info: any
   created_at: string
   updated_at: string
+  user_id: string
 }
 
 export type FileMetadata = {

@@ -1,65 +1,119 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { supabase } from '@/lib/supabase'
+import { useAuth } from '@/contexts/AuthContext'
+import { createClientComponentClient } from '@supabase/auth-helpers-nextjs'
 import { buildDriveKnowledgeMap } from '@/lib/drive-knowledge-builder'
-import { buildDatabaseKnowledgeMap } from '@/lib/database-knowledge-builder'
-import { DriveKnowledgeMap, DatabaseKnowledgeMap } from '@/lib/knowledge-map-types'
+import { DriveKnowledgeMap } from '@/lib/knowledge-map-types'
 
-type ViewMode = 'both' | 'drive' | 'database'
+type ViewMode = 'drive'
 
 export default function KnowledgeMapSchemaPage() {
+  const { user } = useAuth()
   const [driveMap, setDriveMap] = useState<DriveKnowledgeMap | null>(null)
-  const [databaseMap, setDatabaseMap] = useState<DatabaseKnowledgeMap | null>(null)
-  const [viewMode, setViewMode] = useState<ViewMode>('both')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [hasGoogleAuth, setHasGoogleAuth] = useState<boolean | null>(null)
+  
+  // Use auth-helpers client for consistency
+  const supabase = createClientComponentClient()
 
   useEffect(() => {
-    loadKnowledgeMaps()
+    checkAuth()
   }, [])
 
+  useEffect(() => {
+    if (user && hasGoogleAuth !== null) {
+      loadKnowledgeMaps()
+    }
+  }, [user, hasGoogleAuth])
+
+  async function checkAuth() {
+    try {
+      const res = await fetch('/api/auth/check', {
+        credentials: 'include'
+      })
+      const data = await res.json()
+      setHasGoogleAuth(data.authenticated)
+    } catch (error) {
+      console.error('Error checking Google auth:', error)
+      setHasGoogleAuth(false)
+    }
+  }
+
   async function loadKnowledgeMaps() {
+    if (!user) return
+    
     setLoading(true)
     setError(null)
     
     try {
-      // Load both knowledge maps in parallel
-      const [driveResult, databaseResult] = await Promise.allSettled([
-        loadDriveKnowledgeMap(),
-        loadDatabaseKnowledgeMap()
-      ])
-      
-      // Handle Drive result
-      if (driveResult.status === 'fulfilled') {
-        setDriveMap(driveResult.value)
-      } else {
-        console.error('Failed to load Drive knowledge map:', driveResult.reason)
-      }
-      
-      // Handle Database result
-      if (databaseResult.status === 'fulfilled') {
-        setDatabaseMap(databaseResult.value)
-      } else {
-        console.error('Failed to load Database knowledge map:', databaseResult.reason)
-      }
-      
-      // Set error if both failed
-      if (driveResult.status === 'rejected' && databaseResult.status === 'rejected') {
-        setError('Failed to load knowledge maps')
-      }
+      const driveResult = await loadDriveKnowledgeMap()
+      setDriveMap(driveResult)
     } catch (err) {
       console.error('Error loading knowledge maps:', err)
-      setError('An unexpected error occurred')
+      setError('Failed to load knowledge maps')
     } finally {
       setLoading(false)
     }
   }
 
   async function loadDriveKnowledgeMap(): Promise<DriveKnowledgeMap | null> {
+    // If not authenticated with Google, return empty map
+    if (!hasGoogleAuth) {
+      return {
+        timestamp: new Date().toISOString(),
+        source: 'drive',
+        totalItems: 0,
+        knowledgeTree: [],
+        statistics: {
+          folders: 0,
+          files: 0,
+          spreadsheets: 0,
+          documents: 0,
+          processedSpreadsheets: 0,
+          filesWithSummaries: 0,
+          filesWithFailedSummaries: 0,
+          totalSheets: 0,
+          totalColumns: 0,
+          totalSize: 0
+        }
+      }
+    }
+
+    // Get user's Drive source
+    const { data: source } = await supabase
+      .from('data_sources')
+      .select('*')
+      .eq('user_id', user!.id)
+      .eq('type', 'drive')
+      .single()
+    
+    if (!source) {
+      return {
+        timestamp: new Date().toISOString(),
+        source: 'drive',
+        totalItems: 0,
+        knowledgeTree: [],
+        statistics: {
+          folders: 0,
+          files: 0,
+          spreadsheets: 0,
+          documents: 0,
+          processedSpreadsheets: 0,
+          filesWithSummaries: 0,
+          filesWithFailedSummaries: 0,
+          totalSheets: 0,
+          totalColumns: 0,
+          totalSize: 0
+        }
+      }
+    }
+    
     const { data: files, error } = await supabase
       .from('file_metadata')
       .select('*')
+      .eq('source_id', source.id)
       .order('folder_path')
       .order('name')
     
@@ -89,43 +143,25 @@ export default function KnowledgeMapSchemaPage() {
       }
     }
     
-    return buildDriveKnowledgeMap(files)
-  }
-
-  async function loadDatabaseKnowledgeMap(): Promise<DatabaseKnowledgeMap | null> {
-    const { data: schemas, error } = await supabase
-      .from('schema_metadata')
-      .select('*')
-      .order('table_name')
-      .order('column_name')
+    // Get summaries count
+    const { data: summaries } = await supabase
+      .from('file_summaries')
+      .select('file_id')
+      .eq('source_id', source.id)
     
-    if (error) {
-      console.error('Error loading Database schemas:', error)
-      return null
-    }
+    const summaryFileIds = new Set(summaries?.map(s => s.file_id) || [])
     
-    if (!schemas || schemas.length === 0) {
-      return {
-        timestamp: new Date().toISOString(),
-        source: 'database',
-        totalItems: 0,
-        knowledgeTree: [],
-        statistics: {
-          schemas: 0,
-          tables: 0,
-          views: 0,
-          totalColumns: 0,
-          columnsWithDefaults: 0,
-          tablesWithPrimaryKeys: 0,
-          tablesWithIndexes: 0,
-          foreignKeyRelationships: 0,
-          nullableColumns: 0,
-          nonNullableColumns: 0
-        }
+    // Update files with summary status
+    const filesWithSummaryStatus = files.map(file => ({
+      ...file,
+      metadata: {
+        ...file.metadata,
+        summary: summaryFileIds.has(file.file_id) ? 'Generated' : undefined,
+        summaryStatus: summaryFileIds.has(file.file_id) ? 'success' : undefined
       }
-    }
+    }))
     
-    return buildDatabaseKnowledgeMap(schemas)
+    return buildDriveKnowledgeMap(filesWithSummaryStatus)
   }
 
   function downloadJSON(data: any, filename: string) {
@@ -144,7 +180,6 @@ export default function KnowledgeMapSchemaPage() {
     return (
       <div className="min-h-screen bg-gray-50 p-8">
         <div className="max-w-7xl mx-auto">
-          <h1 className="text-2xl font-bold mb-4">Knowledge Map Schema</h1>
           <div className="flex items-center justify-center h-64">
             <div className="text-gray-600">Loading knowledge maps...</div>
           </div>
@@ -153,11 +188,10 @@ export default function KnowledgeMapSchemaPage() {
     )
   }
 
-  if (error && !driveMap && !databaseMap) {
+  if (error && !driveMap) {
     return (
       <div className="min-h-screen bg-gray-50 p-8">
         <div className="max-w-7xl mx-auto">
-          <h1 className="text-2xl font-bold mb-4">Knowledge Map Schema</h1>
           <div className="bg-red-50 border border-red-200 rounded-lg p-4">
             <p className="text-red-800">{error}</p>
           </div>
@@ -172,14 +206,14 @@ export default function KnowledgeMapSchemaPage() {
         {/* Header */}
         <div className="flex justify-between items-center mb-6">
           <h1 className="text-2xl font-bold">Knowledge Map Schema</h1>
-          <div className="flex gap-2">
+          <div className="flex items-center gap-4">
             <button
               onClick={() => loadKnowledgeMaps()}
               className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-md text-sm"
             >
               Refresh
             </button>
-            {driveMap && (
+            {driveMap && hasGoogleAuth && driveMap.totalItems > 0 && (
               <button
                 onClick={() => downloadJSON(driveMap, 'drive-knowledge-map.json')}
                 className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-md text-sm"
@@ -187,217 +221,105 @@ export default function KnowledgeMapSchemaPage() {
                 Download Drive JSON
               </button>
             )}
-            {databaseMap && (
-              <button
-                onClick={() => downloadJSON(databaseMap, 'database-knowledge-map.json')}
-                className="bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded-md text-sm"
-              >
-                Download Database JSON
-              </button>
-            )}
           </div>
         </div>
 
-        {/* View Mode Tabs */}
-        <div className="border-b border-gray-200 mb-6">
-          <nav className="-mb-px flex space-x-8">
-            <button
-              onClick={() => setViewMode('both')}
-              className={`py-2 px-1 border-b-2 font-medium text-sm ${
-                viewMode === 'both'
-                  ? 'border-blue-500 text-blue-600'
-                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-              }`}
-            >
-              Both
-            </button>
-            <button
-              onClick={() => setViewMode('drive')}
-              className={`py-2 px-1 border-b-2 font-medium text-sm ${
-                viewMode === 'drive'
-                  ? 'border-green-500 text-green-600'
-                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-              }`}
-            >
-              Drive Only
-            </button>
-            <button
-              onClick={() => setViewMode('database')}
-              className={`py-2 px-1 border-b-2 font-medium text-sm ${
-                viewMode === 'database'
-                  ? 'border-purple-500 text-purple-600'
-                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-              }`}
-            >
-              Database Only
-            </button>
-          </nav>
+        {/* Note about Database */}
+        <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-6">
+          <p className="text-blue-800 text-sm">
+            Database schema viewing is temporarily disabled while we implement the new authentication system.
+            Only Google Drive schema is available at this time.
+          </p>
         </div>
 
-        {/* Content based on view mode */}
-        {viewMode === 'both' && (
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            {/* Drive Schema */}
-            <div>
-              <h2 className="text-lg font-semibold mb-3 text-green-700">
-                Drive Knowledge Map
-              </h2>
-              {driveMap ? (
-                <>
-                  <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4 mb-3">
-                    <h3 className="font-medium mb-2">Statistics</h3>
-                    <div className="grid grid-cols-2 gap-2 text-sm">
-                      <div>Folders: {driveMap.statistics.folders}</div>
-                      <div>Files: {driveMap.statistics.files}</div>
-                      <div>Spreadsheets: {driveMap.statistics.spreadsheets}</div>
-                      <div>Documents: {driveMap.statistics.documents}</div>
-                      <div>Total Sheets: {driveMap.statistics.totalSheets}</div>
-                      <div>Total Columns: {driveMap.statistics.totalColumns}</div>
-                      <div>With Summaries: {driveMap.statistics.filesWithSummaries}</div>
-                      <div>Size: {(driveMap.statistics.totalSize / (1024 * 1024)).toFixed(2)} MB</div>
-                    </div>
-                  </div>
-                  <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
-                    <pre className="text-xs overflow-auto max-h-[600px]">
-                      {JSON.stringify(driveMap, null, 2)}
-                    </pre>
-                  </div>
-                </>
-              ) : (
-                <div className="bg-gray-100 rounded-lg p-4 text-gray-600">
-                  No Drive data available
-                </div>
-              )}
+        {/* Drive Schema */}
+        <div>
+          <h2 className="text-lg font-semibold mb-3 text-green-700">
+            Drive Knowledge Map
+          </h2>
+          {!hasGoogleAuth ? (
+            <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-6 text-center">
+              <svg className="w-12 h-12 mx-auto text-yellow-600 mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+              </svg>
+              <p className="text-yellow-800">Google Drive not connected. Connect your account to view the Drive schema.</p>
             </div>
-
-            {/* Database Schema */}
-            <div>
-              <h2 className="text-lg font-semibold mb-3 text-purple-700">
-                Database Knowledge Map
-              </h2>
-              {databaseMap ? (
-                <>
-                  <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4 mb-3">
-                    <h3 className="font-medium mb-2">Statistics</h3>
-                    <div className="grid grid-cols-2 gap-2 text-sm">
-                      <div>Schemas: {databaseMap.statistics.schemas}</div>
-                      <div>Tables: {databaseMap.statistics.tables}</div>
-                      <div>Views: {databaseMap.statistics.views}</div>
-                      <div>Total Columns: {databaseMap.statistics.totalColumns}</div>
-                      <div>With Defaults: {databaseMap.statistics.columnsWithDefaults}</div>
-                      <div>Nullable: {databaseMap.statistics.nullableColumns}</div>
-                      <div>With Primary Keys: {databaseMap.statistics.tablesWithPrimaryKeys}</div>
-                      <div>Foreign Keys: {databaseMap.statistics.foreignKeyRelationships}</div>
+          ) : driveMap ? (
+            <>
+              <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4 mb-4">
+                <h3 className="font-medium mb-3">Drive Statistics</h3>
+                <div className="grid grid-cols-4 gap-4">
+                  <div>
+                    <div className="text-2xl font-bold text-green-600">
+                      {driveMap.statistics.folders}
                     </div>
+                    <div className="text-sm text-gray-600">Folders</div>
                   </div>
-                  <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
-                    <pre className="text-xs overflow-auto max-h-[600px]">
-                      {JSON.stringify(databaseMap, null, 2)}
-                    </pre>
+                  <div>
+                    <div className="text-2xl font-bold text-blue-600">
+                      {driveMap.statistics.files}
+                    </div>
+                    <div className="text-sm text-gray-600">Files</div>
                   </div>
-                </>
-              ) : (
-                <div className="bg-gray-100 rounded-lg p-4 text-gray-600">
-                  No Database schema available
-                </div>
-              )}
-            </div>
-          </div>
-        )}
-
-        {viewMode === 'drive' && (
-          <div>
-            {driveMap ? (
-              <>
-                <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4 mb-4">
-                  <h3 className="font-medium mb-3">Drive Statistics</h3>
-                  <div className="grid grid-cols-4 gap-4">
-                    <div>
-                      <div className="text-2xl font-bold text-green-600">
-                        {driveMap.statistics.folders}
-                      </div>
-                      <div className="text-sm text-gray-600">Folders</div>
+                  <div>
+                    <div className="text-2xl font-bold text-purple-600">
+                      {driveMap.statistics.totalColumns}
                     </div>
-                    <div>
-                      <div className="text-2xl font-bold text-blue-600">
-                        {driveMap.statistics.files}
-                      </div>
-                      <div className="text-sm text-gray-600">Files</div>
+                    <div className="text-sm text-gray-600">Total Columns</div>
+                  </div>
+                  <div>
+                    <div className="text-2xl font-bold text-orange-600">
+                      {(driveMap.statistics.totalSize / (1024 * 1024)).toFixed(2)} MB
                     </div>
-                    <div>
-                      <div className="text-2xl font-bold text-purple-600">
-                        {driveMap.statistics.totalColumns}
-                      </div>
-                      <div className="text-sm text-gray-600">Total Columns</div>
-                    </div>
-                    <div>
-                      <div className="text-2xl font-bold text-orange-600">
-                        {(driveMap.statistics.totalSize / (1024 * 1024)).toFixed(2)} MB
-                      </div>
-                      <div className="text-sm text-gray-600">Total Size</div>
-                    </div>
+                    <div className="text-sm text-gray-600">Total Size</div>
                   </div>
                 </div>
+                <div className="grid grid-cols-4 gap-4 mt-4">
+                  <div>
+                    <div className="text-lg font-bold text-green-600">
+                      {driveMap.statistics.spreadsheets}
+                    </div>
+                    <div className="text-sm text-gray-600">Spreadsheets</div>
+                  </div>
+                  <div>
+                    <div className="text-lg font-bold text-blue-600">
+                      {driveMap.statistics.documents}
+                    </div>
+                    <div className="text-sm text-gray-600">Documents</div>
+                  </div>
+                  <div>
+                    <div className="text-lg font-bold text-purple-600">
+                      {driveMap.statistics.filesWithSummaries}
+                    </div>
+                    <div className="text-sm text-gray-600">With Summaries</div>
+                  </div>
+                  <div>
+                    <div className="text-lg font-bold text-orange-600">
+                      {driveMap.statistics.totalSheets}
+                    </div>
+                    <div className="text-sm text-gray-600">Total Sheets</div>
+                  </div>
+                </div>
+              </div>
+              {driveMap.totalItems > 0 && (
                 <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
                   <pre className="text-xs overflow-auto">
                     {JSON.stringify(driveMap, null, 2)}
                   </pre>
                 </div>
-              </>
-            ) : (
-              <div className="bg-gray-100 rounded-lg p-4 text-gray-600">
-                No Drive data available
-              </div>
-            )}
-          </div>
-        )}
-
-        {viewMode === 'database' && (
-          <div>
-            {databaseMap ? (
-              <>
-                <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4 mb-4">
-                  <h3 className="font-medium mb-3">Database Statistics</h3>
-                  <div className="grid grid-cols-4 gap-4">
-                    <div>
-                      <div className="text-2xl font-bold text-purple-600">
-                        {databaseMap.statistics.tables}
-                      </div>
-                      <div className="text-sm text-gray-600">Tables</div>
-                    </div>
-                    <div>
-                      <div className="text-2xl font-bold text-blue-600">
-                        {databaseMap.statistics.totalColumns}
-                      </div>
-                      <div className="text-sm text-gray-600">Columns</div>
-                    </div>
-                    <div>
-                      <div className="text-2xl font-bold text-green-600">
-                        {databaseMap.statistics.tablesWithPrimaryKeys}
-                      </div>
-                      <div className="text-sm text-gray-600">With Primary Keys</div>
-                    </div>
-                    <div>
-                      <div className="text-2xl font-bold text-orange-600">
-                        {databaseMap.statistics.foreignKeyRelationships}
-                      </div>
-                      <div className="text-sm text-gray-600">Foreign Keys</div>
-                    </div>
-                  </div>
+              )}
+              {driveMap.totalItems === 0 && (
+                <div className="bg-gray-100 rounded-lg p-4 text-gray-600 text-center">
+                  No Drive data indexed yet. Go to Knowledge Map to index some folders.
                 </div>
-                <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
-                  <pre className="text-xs overflow-auto">
-                    {JSON.stringify(databaseMap, null, 2)}
-                  </pre>
-                </div>
-              </>
-            ) : (
-              <div className="bg-gray-100 rounded-lg p-4 text-gray-600">
-                No Database schema available
-              </div>
-            )}
-          </div>
-        )}
+              )}
+            </>
+          ) : (
+            <div className="bg-gray-100 rounded-lg p-4 text-gray-600">
+              No Drive data available
+            </div>
+          )}
+        </div>
       </div>
     </div>
   )

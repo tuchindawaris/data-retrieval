@@ -159,6 +159,7 @@ function calculateDriveStatistics(files: FileMetadata[]): DriveStatistics {
     files: 0,
     spreadsheets: 0,
     documents: 0,
+    unsupportedFiles: 0,
     processedSpreadsheets: 0,
     filesWithSummaries: 0,
     filesWithFailedSummaries: 0,
@@ -189,10 +190,11 @@ function calculateDriveStatistics(files: FileMetadata[]): DriveStatistics {
             }
           })
         }
-      }
-      
-      if (file.metadata?.isDocument) {
+      } else if (file.metadata?.isDocument) {
         stats.documents++
+      } else {
+        // File is neither spreadsheet nor document - it's unsupported
+        stats.unsupportedFiles++
       }
       
       // Count summaries
