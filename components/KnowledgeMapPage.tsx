@@ -4,7 +4,9 @@ import { useEffect, useState } from 'react'
 import { createClientComponentClient } from '@supabase/auth-helpers-nextjs'
 import { useAuth } from '@/contexts/AuthContext'
 import GoogleAccountStatus from '@/components/GoogleAccountStatus'
+import SemanticSearch from '@/components/SemanticSearch'
 import type { DataSource, FileMetadata } from '@/lib/supabase'
+
 
 // File type groupings for uniform parsing
 const FILE_GROUPS = {
@@ -114,7 +116,7 @@ function getFileGroup(mimeType: string, fileName: string) {
 
 export default function KnowledgeMapPage() {
   const { user } = useAuth()
-  const [activeTab, setActiveTab] = useState<'sql' | 'drive'>('drive')
+  const [activeTab, setActiveTab] = useState<'sql' | 'drive' | 'search'>('drive')
   const [loading, setLoading] = useState(true)
   const [syncing, setSyncing] = useState(false)
   const [indexing, setIndexing] = useState(false)
@@ -132,6 +134,13 @@ export default function KnowledgeMapPage() {
   const [expandedSpreadsheets, setExpandedSpreadsheets] = useState<Set<string>>(new Set())
   const [generatingSummaries, setGeneratingSummaries] = useState(false)
   const [fileSummaries, setFileSummaries] = useState<Map<string, any>>(new Map())
+  
+  // New states for embeddings
+  const [generatingEmbeddings, setGeneratingEmbeddings] = useState(false)
+  const [embeddingStats, setEmbeddingStats] = useState<{
+    totalDocuments: number
+    embeddedDocuments: number
+  } | null>(null)
   
   // Use auth-helpers client for consistency
   const supabase = createClientComponentClient()
@@ -214,7 +223,32 @@ export default function KnowledgeMapPage() {
     })
     setFileSummaries(summaryMap)
     
+    // Load embedding stats
+    await loadEmbeddingStats(source.id)
+    
     setLoading(false)
+  }
+
+  async function loadEmbeddingStats(sourceId: string) {
+    // Count total documents
+    const { count: totalDocs } = await supabase
+      .from('file_metadata')
+      .select('*', { count: 'exact', head: true })
+      .eq('source_id', sourceId)
+      .or('metadata->isDocument.eq.true,mime_type.in.(text/plain,text/markdown,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.google-apps.document,application/rtf,application/vnd.oasis.opendocument.text)')
+    
+    // Count embedded documents
+    const { data: embeddedDocs } = await supabase
+      .from('document_embeddings')
+      .select('file_id', { count: 'exact' })
+      .eq('source_id', sourceId)
+    
+    const uniqueEmbeddedDocs = new Set(embeddedDocs?.map(d => d.file_id) || [])
+    
+    setEmbeddingStats({
+      totalDocuments: totalDocs || 0,
+      embeddedDocuments: uniqueEmbeddedDocs.size
+    })
   }
 
   async function handleResync() {
@@ -249,8 +283,6 @@ export default function KnowledgeMapPage() {
     await loadData()
     setSyncing(false)
   }
-
-
 
   async function indexDriveFolder() {
     if (!folderUrl || !hasGoogleAuth) return
@@ -471,6 +503,52 @@ export default function KnowledgeMapPage() {
     }
   }
 
+  async function generateEmbeddingsForDocuments() {
+    const confirmMessage = embeddingStats && embeddingStats.embeddedDocuments > 0
+      ? `Generate embeddings for documents? ${embeddingStats.embeddedDocuments}/${embeddingStats.totalDocuments} documents already have embeddings. This will use your OpenAI API quota.`
+      : 'Generate embeddings for all documents? This will use your OpenAI API quota.'
+      
+    if (!confirm(confirmMessage)) {
+      return
+    }
+    
+    setGeneratingEmbeddings(true)
+    console.log('Starting embedding generation...')
+    
+    try {
+      const response = await fetch('/api/drive/generate-embeddings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ forceRegenerate: false }),
+      })
+      
+      const data = await response.json()
+      
+      if (response.ok) {
+        await loadData()
+        let message = `Successfully generated embeddings!\n`
+        message += `- Documents processed: ${data.processed}\n`
+        message += `- Documents embedded: ${data.embedded}\n`
+        message += `- Total chunks: ${data.totalChunks || 0}\n`
+        message += `- Failed: ${data.failed}\n`
+        message += `- Tokens used: ${data.tokensUsed || 0}\n`
+        message += `- Duration: ${(data.duration / 1000).toFixed(1)}s`
+        
+        alert(message)
+        console.log('Embedding generation complete:', data)
+      } else {
+        alert(`Failed to generate embeddings: ${data.error || 'Unknown error'}`)
+        console.error('Embedding generation failed:', data)
+      }
+    } catch (error) {
+      alert('Error generating embeddings')
+      console.error('Error:', error)
+    } finally {
+      setGeneratingEmbeddings(false)
+    }
+  }
+
   function renderFolderNode(node: FolderNode, level: number = 0) {
     const isExpanded = expandedFolders.has(node.id)
     
@@ -632,6 +710,19 @@ export default function KnowledgeMapPage() {
               {activeTab === 'drive' && hasGoogleAuth && files.length > 0 && (
                 <>
                   <button
+                    onClick={generateEmbeddingsForDocuments}
+                    disabled={generatingEmbeddings}
+                    className="bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-400 text-white px-4 py-2 rounded-md text-sm font-medium transition-colors"
+                  >
+                    {generatingEmbeddings ? 'Generating...' : 'Generate Embeddings'}
+                    {embeddingStats && (
+                      <span className="ml-2 text-xs opacity-80">
+                        ({embeddingStats.embeddedDocuments}/{embeddingStats.totalDocuments})
+                      </span>
+                    )}
+                  </button>
+                  
+                  <button
                     onClick={generateSummariesForFiles}
                     disabled={generatingSummaries}
                     className="bg-purple-600 hover:bg-purple-700 disabled:bg-gray-400 text-white px-4 py-2 rounded-md text-sm font-medium transition-colors"
@@ -648,8 +739,6 @@ export default function KnowledgeMapPage() {
                   </button>
                 </>
               )}
-              
-
               
               <button
                 onClick={handleResync}
@@ -684,6 +773,16 @@ export default function KnowledgeMapPage() {
             >
               Google Drive
             </button>
+            <button
+              onClick={() => setActiveTab('search')}
+              className={`py-2 px-1 border-b-2 font-medium text-sm ${
+                activeTab === 'search'
+                  ? 'border-blue-500 text-blue-600'
+                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+              }`}
+            >
+              🔍 Search Documents
+            </button>
           </nav>
         </div>
 
@@ -703,6 +802,39 @@ export default function KnowledgeMapPage() {
                 </div>
                 <h3 className="text-lg font-medium mb-2">Database Connection Coming Soon</h3>
                 <p>Connect to your PostgreSQL, MySQL, or other databases to query with natural language.</p>
+              </div>
+            )}
+
+            {/* Search View */}
+            {activeTab === 'search' && (
+              <div>
+                {hasGoogleAuth ? (
+                  embeddingStats && embeddingStats.embeddedDocuments > 0 ? (
+                    <SemanticSearch />
+                  ) : (
+                    <div className="text-center py-12">
+                      <svg className="w-16 h-16 mx-auto text-gray-300 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
+                      </svg>
+                      <h3 className="text-lg font-medium text-gray-900 mb-2">No Document Embeddings Yet</h3>
+                      <p className="text-gray-500 mb-4">Generate embeddings for your documents to enable semantic search</p>
+                      <button
+                        onClick={() => setActiveTab('drive')}
+                        className="text-blue-600 hover:text-blue-800"
+                      >
+                        Go to Drive tab to generate embeddings
+                      </button>
+                    </div>
+                  )
+                ) : (
+                  <div className="text-center py-12">
+                    <svg className="w-16 h-16 mx-auto text-gray-300 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+                    </svg>
+                    <h3 className="text-lg font-medium text-gray-900 mb-2">Google Drive Not Connected</h3>
+                    <p className="text-gray-500 mb-4">Connect your Google Drive account to search documents</p>
+                  </div>
+                )}
               </div>
             )}
 
