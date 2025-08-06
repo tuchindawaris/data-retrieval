@@ -1,5 +1,3 @@
-// lib/sheet-structure-types.ts
-
 export interface SheetStructure {
   sheetName: string
   dimensions: {
@@ -22,10 +20,10 @@ export interface ColumnStructure {
   name: string
   letter: string
   dataType: 'string' | 'number' | 'date' | 'boolean' | 'currency' | 'percentage' | 'mixed' | 'empty'
-  density: number // 0-1, percentage of non-empty cells
+  density: number
   uniqueValueCount?: number
   hasFormula: boolean
-  samplePatterns?: string[] // Regex patterns found in data
+  samplePatterns?: string[]
 }
 
 export interface TableStructure {
@@ -50,10 +48,6 @@ export interface DataPatterns {
     endRow: number
     startCol: number
     endCol: number
-  }>
-  repeatingHeaders?: Array<{
-    row: number
-    pattern: string[]
   }>
 }
 

@@ -1,5 +1,3 @@
-// lib/spreadsheet-search-enhanced.ts
-
 import * as XLSX from 'xlsx'
 import { getDriveClient } from './google-drive'
 import { SheetStructureAnalyzer } from './sheet-structure-analyzer'
@@ -8,7 +6,6 @@ import { ExtractionCodeExecutor } from './extraction-code-executor'
 import { SpreadsheetSearchAnalyzer } from './spreadsheet-search-analyzer'
 import { 
   ExtractionContext,
-  GeneratedExtraction,
   SheetStructure 
 } from './sheet-structure-types'
 import { 
@@ -26,7 +23,7 @@ export interface EnhancedSearchResult {
   relevanceScore: number
   extraction: {
     structure: SheetStructure
-    plan: GeneratedExtraction
+    plan: any
     result: any
     executionTime: number
     rowsProcessed?: number
@@ -50,9 +47,6 @@ export class EnhancedSpreadsheetSearch {
     this.searchAnalyzer = new SpreadsheetSearchAnalyzer()
   }
   
-  /**
-   * Perform enhanced search with LLM-generated extraction
-   */
   async search(
     request: SpreadsheetSearchRequest,
     files: FileMetadata[],
@@ -65,16 +59,10 @@ export class EnhancedSpreadsheetSearch {
   }> {
     const startTime = Date.now()
     
-    console.log('\n=== ENHANCED SPREADSHEET SEARCH ===')
-    console.log('Query:', request.query)
-    
-    // Step 1: Analyze query intent
-    console.log('\n--- Analyzing query intent ---')
+    // Step 1: Analyze intent
     const intent = await this.searchAnalyzer.analyzeQueryIntent(request.query)
-    console.log('Intent:', JSON.stringify(intent, null, 2))
     
     // Step 2: Find relevant sheets
-    console.log('\n--- Finding relevant sheets ---')
     const matchedSheets = await this.searchAnalyzer.matchSheetsToQuery(
       request.query,
       files,
@@ -85,24 +73,11 @@ export class EnhancedSpreadsheetSearch {
       .filter(m => m.relevanceScore >= (request.matchThreshold || 0.7))
       .slice(0, request.maxSheets || 10)
     
-    console.log(`Found ${relevantSheets.length} relevant sheets`)
-    
-    if (relevantSheets.length === 0) {
-      return {
-        results: [],
-        query: request.query,
-        intent,
-        duration: Date.now() - startTime
-      }
-    }
-    
-    // Step 3: Process each sheet with LLM extraction
+    // Step 3: Process each sheet
     const results: EnhancedSearchResult[] = []
     
     for (const sheetMatch of relevantSheets) {
       try {
-        console.log(`\n--- Processing ${sheetMatch.fileName} - ${sheetMatch.sheetName} ---`)
-        
         const result = await this.processSheet(
           sheetMatch,
           request,
@@ -114,26 +89,19 @@ export class EnhancedSpreadsheetSearch {
         if (result) {
           results.push(result)
         }
-        
       } catch (error: any) {
         console.error(`Failed to process ${sheetMatch.fileName}:`, error.message)
       }
     }
     
-    const duration = Date.now() - startTime
-    console.log(`\n=== Search completed in ${duration}ms ===`)
-    
     return {
       results,
       query: request.query,
       intent,
-      duration
+      duration: Date.now() - startTime
     }
   }
   
-  /**
-   * Process individual sheet with LLM extraction
-   */
   private async processSheet(
     sheetMatch: SheetMatch,
     request: SpreadsheetSearchRequest,
@@ -143,15 +111,10 @@ export class EnhancedSpreadsheetSearch {
   ): Promise<EnhancedSearchResult | null> {
     const searchStartTime = Date.now()
     
-    // Get file metadata
     const file = files.find(f => f.file_id === sheetMatch.fileId)
-    if (!file) {
-      console.error('File not found:', sheetMatch.fileId)
-      return null
-    }
+    if (!file) return null
     
     // Load sheet data
-    console.log('Loading sheet data...')
     const sheetData = await this.loadSheet(
       accessToken,
       file.file_id,
@@ -161,75 +124,49 @@ export class EnhancedSpreadsheetSearch {
       sheetMatch.sheetIndex
     )
     
-    if (!sheetData) {
-      console.error('Failed to load sheet data')
-      return null
-    }
+    if (!sheetData) return null
     
-    // Analyze sheet structure
-    console.log('Analyzing sheet structure...')
+    // Analyze structure
     const structure = this.structureAnalyzer.analyzeStructure(
       sheetData.worksheet,
       sheetMatch.sheetName
     )
     
-    console.log(`Structure: ${structure.dimensions.rows} rows, ${structure.dimensions.cols} columns`)
-    console.log(`Tables found: ${structure.tables.length}`)
-    
-    // Generate extraction context
+    // Create context
     const context: ExtractionContext = {
       sheetStructure: structure,
       query: request.query,
       intent
     }
     
-    // Generate extraction code
-    console.log('Generating extraction code...')
-    const extraction = await this.extractionGenerator.generateExtractionCode(context)
+    // Generate extraction code with sample data
+    const sampleRows = sheetData.rows.slice(0, 10) // Pass first 10 rows as sample
+    const extraction = await this.extractionGenerator.generateExtractionCode(
+      context,
+      sampleRows
+    )
     
-    console.log('Extraction plan:', extraction.description)
-    console.log(`Confidence: ${extraction.confidence}`)
-    if (extraction.warnings?.length) {
-      console.warn('Warnings:', extraction.warnings)
-    }
-    
-    // Log available columns for debugging
-    console.log('Available columns:', sheetData.headers.map((h, i) => `${i}: "${h}"`).join(', '))
-    
-    // Execute extraction with retry
-    console.log('Executing extraction...')
-    console.log(`Data dimensions: ${sheetData.rows.length} rows, ${sheetData.headers.length} columns`)
+    // Execute extraction
     const executionResult = await this.codeExecutor.executeWithRetry(
       extraction,
       sheetData.rows,
       sheetData.headers,
       async (attempt, error) => {
-        // Regenerate code based on error
-        console.log(`Regenerating code after error: ${error}`)
-        
-        // Add more context about the error
-        let errorContext = error;
-        if (error.includes('Cannot read properties of undefined')) {
-          errorContext += '. Make sure to check if arrays exist before accessing .length or array indices.';
-        }
-        
+        // Regenerate with error context
         const retryContext: ExtractionContext = {
           ...context,
-          query: `${request.query} (Previous attempt failed with: ${errorContext}. Please adjust the code to handle this error. Remember to ALWAYS check if arrays exist and have valid length before accessing them.)`
+          query: `${request.query} (Error: ${error}. Adjust the code.)`
         }
-        
-        return await this.extractionGenerator.generateExtractionCode(retryContext)
+        return await this.extractionGenerator.generateExtractionCode(
+          retryContext,
+          sampleRows
+        )
       }
     )
     
     if (!executionResult.success) {
       console.error('Extraction failed:', executionResult.error)
       return null
-    }
-    
-    console.log(`Extraction successful in ${executionResult.executionTime}ms`)
-    if (executionResult.rowsProcessed) {
-      console.log(`Rows processed: ${executionResult.rowsProcessed}`)
     }
     
     return {
@@ -252,9 +189,6 @@ export class EnhancedSpreadsheetSearch {
     }
   }
   
-  /**
-   * Load sheet data from Google Drive
-   */
   private async loadSheet(
     accessToken: string,
     fileId: string,
@@ -273,7 +207,6 @@ export class EnhancedSpreadsheetSearch {
       let fileBuffer: Buffer
       
       if (mimeType === 'application/vnd.google-apps.spreadsheet') {
-        // Export Google Sheets as xlsx
         const response = await drive.files.export({
           fileId: fileId,
           mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
@@ -281,7 +214,6 @@ export class EnhancedSpreadsheetSearch {
         
         fileBuffer = Buffer.from(response.data as ArrayBuffer)
       } else {
-        // Download other files as-is
         const response = await drive.files.get({
           fileId: fileId,
           alt: 'media'
@@ -290,7 +222,6 @@ export class EnhancedSpreadsheetSearch {
         fileBuffer = Buffer.from(response.data as ArrayBuffer)
       }
       
-      // Parse with SheetJS
       const workbook = XLSX.read(fileBuffer, {
         cellDates: true,
         cellNF: true,
@@ -299,14 +230,12 @@ export class EnhancedSpreadsheetSearch {
         type: 'buffer'
       })
       
-      // Get the specific sheet
       const worksheet = workbook.Sheets[sheetName] || workbook.Sheets[workbook.SheetNames[sheetIndex]]
       
       if (!worksheet) {
         throw new Error(`Sheet "${sheetName}" not found`)
       }
       
-      // Convert to array format
       const data = XLSX.utils.sheet_to_json(worksheet, { 
         header: 1,
         raw: false,
@@ -322,18 +251,16 @@ export class EnhancedSpreadsheetSearch {
         }
       }
       
-      // Extract headers and rows
       const headers = (data[0] || []).map((h: any, i: number) => 
         h?.toString().trim() || `Column ${i + 1}`
       )
       
-      // Ensure we always return valid arrays
       const rows = data.slice(1).filter(row => Array.isArray(row))
       
       return {
         worksheet,
-        headers: headers || [],
-        rows: rows || []
+        headers,
+        rows
       }
       
     } catch (error) {

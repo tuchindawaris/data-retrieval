@@ -1,5 +1,3 @@
-// components/SpreadsheetDataTable.tsx
-
 'use client'
 
 import { useState, useMemo } from 'react'
@@ -7,18 +5,9 @@ import { useState, useMemo } from 'react'
 interface SpreadsheetDataTableProps {
   headers: string[]
   rows: any[][]
-  matchedColumns?: number[]
-  keyColumnIndex?: number // Add key column index
 }
 
-
-export default function SpreadsheetDataTable({ 
-  headers, 
-  rows, 
-  matchedColumns = [],
-  keyColumnIndex
-}: SpreadsheetDataTableProps) {
-
+export default function SpreadsheetDataTable({ headers, rows }: SpreadsheetDataTableProps) {
   const [sortColumn, setSortColumn] = useState<number | null>(null)
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc')
   const [filterValues, setFilterValues] = useState<Record<number, string>>({})
@@ -46,12 +35,10 @@ export default function SpreadsheetDataTable({
         const aVal = a[sortColumn]
         const bVal = b[sortColumn]
         
-        // Handle null/undefined
         if (aVal == null && bVal == null) return 0
         if (aVal == null) return sortDirection === 'asc' ? 1 : -1
         if (bVal == null) return sortDirection === 'asc' ? -1 : 1
         
-        // Try numeric comparison first
         const aNum = parseFloat(String(aVal).replace(/[$,]/g, ''))
         const bNum = parseFloat(String(bVal).replace(/[$,]/g, ''))
         
@@ -59,7 +46,6 @@ export default function SpreadsheetDataTable({
           return sortDirection === 'asc' ? aNum - bNum : bNum - aNum
         }
         
-        // Fall back to string comparison
         const aStr = String(aVal).toLowerCase()
         const bStr = String(bVal).toLowerCase()
         
@@ -95,7 +81,7 @@ export default function SpreadsheetDataTable({
       ...prev,
       [colIndex]: value
     }))
-    setCurrentPage(0) // Reset to first page when filtering
+    setCurrentPage(0)
   }
   
   const clearFilters = () => {
@@ -103,62 +89,6 @@ export default function SpreadsheetDataTable({
     setCurrentPage(0)
   }
   
-  const getColumnStats = (colIndex: number) => {
-    const values = rows.map(r => r[colIndex]).filter(v => v != null && v !== '')
-    const uniqueValues = new Set(values)
-    
-    // Check if numeric
-    const numbers = values
-      .map(v => parseFloat(String(v).replace(/[$,]/g, '')))
-      .filter(n => !isNaN(n))
-    
-    if (numbers.length > values.length * 0.5) {
-      const min = Math.min(...numbers)
-      const max = Math.max(...numbers)
-      const avg = numbers.reduce((a, b) => a + b, 0) / numbers.length
-      
-      return {
-        type: 'numeric',
-        min,
-        max,
-        avg,
-        unique: uniqueValues.size
-      }
-    }
-    
-    return {
-      type: 'text',
-      unique: uniqueValues.size,
-      maxLength: Math.max(...values.map(v => String(v).length))
-    }
-  }
-  
-    const getColumnClass = (colIndex: number) => {
-    const classes = []
-    
-    if (keyColumnIndex === colIndex) {
-      classes.push('bg-purple-50 border-x-2 border-purple-200')
-    } else if (matchedColumns.includes(colIndex)) {
-      classes.push('bg-green-50')
-    }
-    
-    return classes.join(' ')
-  }
-  
-  // Helper to get header styling
-  const getHeaderClass = (colIndex: number) => {
-    const baseClass = 'px-3 py-2 text-left text-xs font-medium uppercase tracking-wider cursor-pointer hover:bg-gray-100'
-    
-    if (keyColumnIndex === colIndex) {
-      return `${baseClass} bg-purple-100 text-purple-900 border-x-2 border-purple-200`
-    } else if (matchedColumns.includes(colIndex)) {
-      return `${baseClass} bg-green-100 text-green-900`
-    }
-    
-    return `${baseClass} text-gray-500`
-  }
-  
-
   return (
     <div>
       {/* Table Controls */}
@@ -206,17 +136,6 @@ export default function SpreadsheetDataTable({
           </select>
         </div>
       </div>
-      {/* Add legend for highlighting */}
-      <div className="mb-2 flex items-center gap-4 text-xs">
-        <div className="flex items-center gap-1">
-          <div className="w-4 h-4 bg-purple-100 border border-purple-300 rounded"></div>
-          <span className="text-gray-600">Key Column (Grouped By)</span>
-        </div>
-        <div className="flex items-center gap-1">
-          <div className="w-4 h-4 bg-green-100 border border-green-300 rounded"></div>
-          <span className="text-gray-600">Matched Columns</span>
-        </div>
-      </div>
       
       {/* Table */}
       <div className="overflow-x-auto border border-gray-200 rounded-lg">
@@ -229,7 +148,7 @@ export default function SpreadsheetDataTable({
               {headers.map((header, i) => (
                 <th
                   key={i}
-                  className={getHeaderClass(i)}
+                  className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
                   onClick={() => handleSort(i)}
                 >
                   <div className="flex items-center gap-1">
@@ -239,25 +158,17 @@ export default function SpreadsheetDataTable({
                         {sortDirection === 'asc' ? '↑' : '↓'}
                       </span>
                     )}
-                    {keyColumnIndex === i && (
-                      <span className="ml-1 px-1.5 py-0.5 bg-purple-200 text-purple-800 text-xs rounded-full">
-                        KEY
-                      </span>
-                    )}
-                    {matchedColumns.includes(i) && keyColumnIndex !== i && (
-                      <span className="text-green-600" title="Matched column">✓</span>
-                    )}
                   </div>
                 </th>
               ))}
             </tr>
             
-            {/* Filter Row - update with key column highlighting */}
+            {/* Filter Row */}
             {showFilters && (
               <tr className="bg-blue-50">
                 <td className="px-3 py-2"></td>
                 {headers.map((_, i) => (
-                  <td key={i} className={`px-3 py-2 ${keyColumnIndex === i ? 'bg-purple-50' : ''}`}>
+                  <td key={i} className="px-3 py-2">
                     <input
                       type="text"
                       placeholder="Filter..."
@@ -282,23 +193,29 @@ export default function SpreadsheetDataTable({
                 </td>
               </tr>
             ) : (
-              paginatedRows.map((row, rowIndex) => (
-                <tr key={rowIndex} className="hover:bg-gray-50">
-                  <td className="px-3 py-2 whitespace-nowrap text-xs text-gray-500">
-                    {currentPage * rowsPerPage + rowIndex + 1}
-                  </td>
-                  {row.map((cell, cellIndex) => (
-                    <td
-                      key={cellIndex}
-                      className={`px-3 py-2 text-sm text-gray-900 ${getColumnClass(cellIndex)}`}
-                    >
-                      <div className="max-w-xs truncate" title={String(cell || '')}>
-                        {formatCellValue(cell)}
-                      </div>
+              paginatedRows.map((row, rowIndex) => {
+                // Ensure row is an array
+                const rowArray = Array.isArray(row) ? row : 
+                  headers.map((_, idx) => row?.[headers[idx]] || '')
+                
+                return (
+                  <tr key={rowIndex} className="hover:bg-gray-50">
+                    <td className="px-3 py-2 whitespace-nowrap text-xs text-gray-500">
+                      {currentPage * rowsPerPage + rowIndex + 1}
                     </td>
-                  ))}
-                </tr>
-              ))
+                    {rowArray.map((cell, cellIndex) => (
+                      <td
+                        key={cellIndex}
+                        className="px-3 py-2 text-sm text-gray-900"
+                      >
+                        <div className="max-w-xs truncate" title={String(cell || '')}>
+                          {formatCellValue(cell)}
+                        </div>
+                      </td>
+                    ))}
+                  </tr>
+                )
+              })
             )}
           </tbody>
         </table>
@@ -354,21 +271,17 @@ export default function SpreadsheetDataTable({
 function formatCellValue(value: any): string {
   if (value == null || value === '') return ''
   
-  // Check if it's a number with currency symbols
   const strValue = String(value)
   if (strValue.includes('$') || /^\d+\.?\d*$/.test(strValue.replace(/[,$]/g, ''))) {
     const num = parseFloat(strValue.replace(/[,$]/g, ''))
     if (!isNaN(num)) {
-      // Format as currency if it had a $ sign
       if (strValue.includes('$')) {
         return `$${num.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
       }
-      // Format as number with commas
       return num.toLocaleString('en-US')
     }
   }
   
-  // Check if it's a date
   const dateVal = Date.parse(strValue)
   if (!isNaN(dateVal) && strValue.match(/\d{1,4}[-/]\d{1,2}[-/]\d{1,4}/)) {
     return new Date(dateVal).toLocaleDateString()

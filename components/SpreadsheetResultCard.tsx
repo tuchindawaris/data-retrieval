@@ -1,13 +1,10 @@
-// components/SpreadsheetResultCard.tsx
-
 'use client'
 
 import { useState } from 'react'
-import { SpreadsheetSearchResult } from '@/lib/spreadsheet-search-types'
 import SpreadsheetDataTable from './SpreadsheetDataTable'
 
 interface SpreadsheetResultCardProps {
-  result: SpreadsheetSearchResult
+  result: any
   rank: number
 }
 
@@ -16,9 +13,7 @@ export default function SpreadsheetResultCard({ result, rank }: SpreadsheetResul
   const [showRawData, setShowRawData] = useState(false)
   
   const relevancePercentage = Math.round(result.relevanceScore * 100)
-
   
-  // Get relevance color
   const getRelevanceColor = (score: number) => {
     if (score >= 0.85) return 'text-green-600 bg-green-50'
     if (score >= 0.75) return 'text-blue-600 bg-blue-50'
@@ -62,9 +57,9 @@ export default function SpreadsheetResultCard({ result, rank }: SpreadsheetResul
               <span className={`px-2 py-1 text-xs font-medium rounded-full ${getRelevanceColor(result.relevanceScore)}`}>
                 {relevancePercentage}% match
               </span>
-              {result.metadata.cacheHit && (
-                <span className="px-2 py-1 text-xs font-medium rounded-full bg-yellow-50 text-yellow-700">
-                  Cached
+              {result.extractionInfo?.confidence && (
+                <span className="px-2 py-1 text-xs font-medium rounded-full bg-blue-50 text-blue-700">
+                  {Math.round(result.extractionInfo.confidence * 100)}% confidence
                 </span>
               )}
             </div>
@@ -77,25 +72,29 @@ export default function SpreadsheetResultCard({ result, rank }: SpreadsheetResul
               </span>
               <span>
                 {result.data.totalRowsFound} rows found
-                {result.data.truncated && ' (showing first 1000)'}
               </span>
-              <span className="text-xs text-gray-500">
-                Searched in {result.metadata.searchDuration}ms
-              </span>
+              {result.extractionInfo?.executionTime && (
+                <span className="text-xs text-gray-500">
+                  Extracted in {result.extractionInfo.executionTime}ms
+                </span>
+              )}
             </div>
             
-            {/* Matched Columns */}
-            {result.matchedColumns.length > 0 && (
-              <div className="mt-2 text-sm">
-                <span className="text-gray-500">Matched columns:</span>
-                {result.matchedColumns.map((col, i) => (
-                  <span key={i} className="ml-2 inline-flex items-center gap-1">
-                    <span className="font-medium">{col.columnName}</span>
-                    <span className="text-xs text-gray-400">
-                      ({col.columnLetter}, {Math.round(col.matchConfidence * 100)}% {col.matchReason})
-                    </span>
-                    {i < result.matchedColumns.length - 1 && ','}
-                  </span>
+            {/* Extraction Info */}
+            {result.extractionInfo && (
+              <div className="mt-2 text-sm text-gray-600">
+                <span className="font-medium">AI Understanding: </span>
+                <span className="italic">{result.extractionInfo.description}</span>
+              </div>
+            )}
+            
+            {/* Warnings */}
+            {result.extractionInfo?.warnings && result.extractionInfo.warnings.length > 0 && (
+              <div className="mt-2">
+                {result.extractionInfo.warnings.map((warning, i) => (
+                  <div key={i} className="text-sm text-yellow-700 bg-yellow-50 px-2 py-1 rounded">
+                    ⚠️ {warning}
+                  </div>
                 ))}
               </div>
             )}
@@ -156,16 +155,7 @@ export default function SpreadsheetResultCard({ result, rank }: SpreadsheetResul
             <SpreadsheetDataTable
               headers={result.data.headers}
               rows={result.data.rows}
-              matchedColumns={result.matchedColumns.map(mc => mc.columnIndex)}
-              keyColumnIndex={result.keyColumn?.columnIndex}
             />
-          )}
-          
-          {/* Footer info */}
-          {result.data.truncated && (
-            <div className="mt-4 text-sm text-yellow-700 bg-yellow-50 p-3 rounded-lg">
-              Results truncated to 1,000 rows. The full sheet contains {result.metadata.totalRows.toLocaleString()} rows.
-            </div>
           )}
         </div>
       )}
