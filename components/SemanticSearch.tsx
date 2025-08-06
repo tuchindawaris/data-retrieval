@@ -4,14 +4,39 @@ import { useState } from 'react'
 import { SearchResult } from '@/app/api/search/semantic/route'
 import CitationCard from './CitationCard'
 
-export default function SemanticSearch() {
-  const [query, setQuery] = useState('')
-  const [results, setResults] = useState<SearchResult[]>([])
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const [searchDuration, setSearchDuration] = useState<number | null>(null)
-  const [matchThreshold, setMatchThreshold] = useState(0.2)
-  const [matchCount, setMatchCount] = useState(10)
+interface SemanticSearchProps {
+  query: string
+  setQuery: (query: string) => void
+  results: SearchResult[]
+  setResults: (results: SearchResult[]) => void
+  loading: boolean
+  setLoading: (loading: boolean) => void
+  error: string | null
+  setError: (error: string | null) => void
+  searchDuration: number | null
+  setSearchDuration: (duration: number | null) => void
+  matchThreshold: number
+  setMatchThreshold: (threshold: number) => void
+  matchCount: number
+  setMatchCount: (count: number) => void
+}
+
+export default function SemanticSearch({
+  query,
+  setQuery,
+  results,
+  setResults,
+  loading,
+  setLoading,
+  error,
+  setError,
+  searchDuration,
+  setSearchDuration,
+  matchThreshold,
+  setMatchThreshold,
+  matchCount,
+  setMatchCount
+}: SemanticSearchProps) {
   const [showSettings, setShowSettings] = useState(false)
 
   const handleSearch = async () => {
@@ -174,3 +199,4 @@ export default function SemanticSearch() {
     </div>
   )
 }
+

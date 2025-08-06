@@ -5,7 +5,10 @@ import { createClientComponentClient } from '@supabase/auth-helpers-nextjs'
 import { useAuth } from '@/contexts/AuthContext'
 import GoogleAccountStatus from '@/components/GoogleAccountStatus'
 import SemanticSearch from '@/components/SemanticSearch'
+import SpreadsheetSearch from '@/components/SpreadsheetSearch'
 import type { DataSource, FileMetadata } from '@/lib/supabase'
+import type { SearchResult } from '@/app/api/search/semantic/route'
+import type { SpreadsheetSearchResult } from '@/lib/spreadsheet-search-types'
 
 
 // File type groupings for uniform parsing
@@ -116,11 +119,13 @@ function getFileGroup(mimeType: string, fileName: string) {
 
 export default function KnowledgeMapPage() {
   const { user } = useAuth()
-  const [activeTab, setActiveTab] = useState<'sql' | 'drive' | 'search'>('drive')
+  const [activeTab, setActiveTab] = useState<'sql' | 'drive' | 'search' | 'spreadsheet'>('drive')
   const [loading, setLoading] = useState(true)
   const [syncing, setSyncing] = useState(false)
   const [indexing, setIndexing] = useState(false)
   const [hasGoogleAuth, setHasGoogleAuth] = useState<boolean | null>(null)
+  const [authChecked, setAuthChecked] = useState(false)
+  const [userId, setUserId] = useState<string | null>(null)
   const [folderUrl, setFolderUrl] = useState('')
   const [deletingFolder, setDeletingFolder] = useState<string | null>(null)
   const [clearingAll, setClearingAll] = useState(false)
@@ -142,16 +147,40 @@ export default function KnowledgeMapPage() {
     embeddedDocuments: number
   } | null>(null)
   
+  // LIFTED SEARCH STATES - Semantic Search
+  const [semanticQuery, setSemanticQuery] = useState('')
+  const [semanticResults, setSemanticResults] = useState<SearchResult[]>([])
+  const [semanticLoading, setSemanticLoading] = useState(false)
+  const [semanticError, setSemanticError] = useState<string | null>(null)
+  const [semanticDuration, setSemanticDuration] = useState<number | null>(null)
+  const [semanticThreshold, setSemanticThreshold] = useState(0.2)
+  const [semanticMatchCount, setSemanticMatchCount] = useState(10)
+  
+  // LIFTED SEARCH STATES - Spreadsheet Search
+  const [spreadsheetQuery, setSpreadsheetQuery] = useState('')
+  const [spreadsheetResults, setSpreadsheetResults] = useState<SpreadsheetSearchResult[]>([])
+  const [spreadsheetLoading, setSpreadsheetLoading] = useState(false)
+  const [spreadsheetError, setSpreadsheetError] = useState<string | null>(null)
+  const [spreadsheetDuration, setSpreadsheetDuration] = useState<number | null>(null)
+  const [spreadsheetThreshold, setSpreadsheetThreshold] = useState(0.7)
+  const [spreadsheetMaxSheets, setSpreadsheetMaxSheets] = useState(10)
+  const [spreadsheetIncludeEmpty, setSpreadsheetIncludeEmpty] = useState(false)
+  const [spreadsheetIntent, setSpreadsheetIntent] = useState<any>(null)
+  
   // Use auth-helpers client for consistency
   const supabase = createClientComponentClient()
 
   useEffect(() => {
-    if (user) {
+    // Only check auth if we haven't checked yet OR if user ID changed
+    if (user && (!authChecked || user.id !== userId)) {
       checkAuth()
+      setAuthChecked(true)
+      setUserId(user.id)
     }
   }, [user])
 
   useEffect(() => {
+    // Only load data if user exists and auth has been checked
     if (user && hasGoogleAuth !== null) {
       loadData()
     }
@@ -783,6 +812,16 @@ export default function KnowledgeMapPage() {
             >
               🔍 Search Documents
             </button>
+            <button
+              onClick={() => setActiveTab('spreadsheet')}
+              className={`py-2 px-1 border-b-2 font-medium text-sm ${
+                activeTab === 'spreadsheet'
+                  ? 'border-green-500 text-green-600'
+                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+              }`}
+            >
+              📊 Search Spreadsheets
+            </button>
           </nav>
         </div>
 
@@ -810,7 +849,22 @@ export default function KnowledgeMapPage() {
               <div>
                 {hasGoogleAuth ? (
                   embeddingStats && embeddingStats.embeddedDocuments > 0 ? (
-                    <SemanticSearch />
+                    <SemanticSearch 
+                      query={semanticQuery}
+                      setQuery={setSemanticQuery}
+                      results={semanticResults}
+                      setResults={setSemanticResults}
+                      loading={semanticLoading}
+                      setLoading={setSemanticLoading}
+                      error={semanticError}
+                      setError={setSemanticError}
+                      searchDuration={semanticDuration}
+                      setSearchDuration={setSemanticDuration}
+                      matchThreshold={semanticThreshold}
+                      setMatchThreshold={setSemanticThreshold}
+                      matchCount={semanticMatchCount}
+                      setMatchCount={setSemanticMatchCount}
+                    />
                   ) : (
                     <div className="text-center py-12">
                       <svg className="w-16 h-16 mx-auto text-gray-300 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -833,6 +887,58 @@ export default function KnowledgeMapPage() {
                     </svg>
                     <h3 className="text-lg font-medium text-gray-900 mb-2">Google Drive Not Connected</h3>
                     <p className="text-gray-500 mb-4">Connect your Google Drive account to search documents</p>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Spreadsheet Search View */}
+            {activeTab === 'spreadsheet' && (
+              <div>
+                {hasGoogleAuth ? (
+                  files.some(f => f.metadata?.isSpreadsheet) ? (
+                    <SpreadsheetSearch 
+                      query={spreadsheetQuery}
+                      setQuery={setSpreadsheetQuery}
+                      results={spreadsheetResults}
+                      setResults={setSpreadsheetResults}
+                      loading={spreadsheetLoading}
+                      setLoading={setSpreadsheetLoading}
+                      error={spreadsheetError}
+                      setError={setSpreadsheetError}
+                      searchDuration={spreadsheetDuration}
+                      setSearchDuration={setSpreadsheetDuration}
+                      matchThreshold={spreadsheetThreshold}
+                      setMatchThreshold={setSpreadsheetThreshold}
+                      maxSheets={spreadsheetMaxSheets}
+                      setMaxSheets={setSpreadsheetMaxSheets}
+                      includeEmptyRows={spreadsheetIncludeEmpty}
+                      setIncludeEmptyRows={setSpreadsheetIncludeEmpty}
+                      searchIntent={spreadsheetIntent}
+                      setSearchIntent={setSpreadsheetIntent}
+                    />
+                  ) : (
+                    <div className="text-center py-12">
+                      <svg className="w-16 h-16 mx-auto text-gray-300 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 17V7m0 10a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2h2a2 2 0 012 2m0 10a2 2 0 002 2h2a2 2 0 002-2M9 7a2 2 0 012-2h2a2 2 0 012 2m0 10V7m0 10a2 2 0 002 2h2a2 2 0 002-2V7a2 2 0 00-2-2h-2a2 2 0 00-2 2" />
+                      </svg>
+                      <h3 className="text-lg font-medium text-gray-900 mb-2">No Spreadsheets Found</h3>
+                      <p className="text-gray-500 mb-4">Index some folders containing spreadsheets to enable search</p>
+                      <button
+                        onClick={() => setActiveTab('drive')}
+                        className="text-green-600 hover:text-green-800"
+                      >
+                        Go to Drive tab to index spreadsheets
+                      </button>
+                    </div>
+                  )
+                ) : (
+                  <div className="text-center py-12">
+                    <svg className="w-16 h-16 mx-auto text-gray-300 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+                    </svg>
+                    <h3 className="text-lg font-medium text-gray-900 mb-2">Google Drive Not Connected</h3>
+                    <p className="text-gray-500 mb-4">Connect your Google Drive account to search spreadsheets</p>
                   </div>
                 )}
               </div>
