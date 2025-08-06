@@ -14,6 +14,7 @@ export interface SpreadsheetSearchResult {
   sheetIndex: number
   relevanceScore: number
   matchedColumns: MatchedColumn[]
+  keyColumn?: MatchedColumn // The primary grouping/filtering column
   data: {
     headers: string[]
     rows: any[][]
@@ -24,6 +25,8 @@ export interface SpreadsheetSearchResult {
     totalRows: number
     searchDuration: number
     cacheHit: boolean
+    filteredByKeyColumn?: boolean
+    rowsBeforeKeyFilter?: number
   }
 }
 
@@ -33,6 +36,7 @@ export interface MatchedColumn {
   columnIndex: number
   matchConfidence: number
   matchReason: 'exact' | 'semantic' | 'fuzzy' | 'inferred'
+  isKeyColumn?: boolean
 }
 
 export interface SheetMatch {
@@ -47,6 +51,7 @@ export interface SheetMatch {
 export interface SearchIntent {
   type: 'lookup' | 'filter' | 'aggregate' | 'list'
   targetColumns: string[]
+  keyColumn?: string // The primary grouping/filtering column (e.g., "by payment_term")
   filters?: SearchFilter[]
   aggregations?: AggregationType[]
 }
@@ -64,6 +69,7 @@ export interface ColumnMatchResult {
   index: number
   confidence: number
   method: 'exact' | 'fuzzy' | 'semantic' | 'pattern'
+  isKeyColumn?: boolean
 }
 
 export interface CachedSpreadsheet {

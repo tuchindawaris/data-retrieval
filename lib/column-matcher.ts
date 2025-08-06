@@ -6,6 +6,8 @@ import { ColumnMatchResult } from './spreadsheet-search-types'
 export class ColumnMatcher {
   private openai: OpenAI
   private synonymMap: Map<string, string[]>
+  private conceptCache: Map<string, string[]>
+  private embeddingCache: Map<string, number[]>
   
   constructor() {
     if (process.env.OPENAI_API_KEY) {
@@ -14,7 +16,11 @@ export class ColumnMatcher {
       })
     }
     
-    // Common synonyms for faster matching
+    // Initialize caches
+    this.conceptCache = new Map()
+    this.embeddingCache = new Map()
+    
+    // Common synonyms for faster matching (keeping for backwards compatibility)
     this.synonymMap = new Map([
       ['vendor', ['supplier', 'provider', 'merchant', 'seller', 'company']],
       ['customer', ['client', 'buyer', 'purchaser', 'account']],
@@ -58,11 +64,23 @@ export class ColumnMatcher {
         }
       }
       
-      // Try semantic match using OpenAI if available
+      // Try embeddings match for cross-language support
+      if ((!match || match.confidence < 0.7) && this.openai) {
+        try {
+          const embeddingsMatch = await this.embeddingsMatch(target, availableColumns)
+          if (!match || (embeddingsMatch && embeddingsMatch.confidence > match.confidence)) {
+            match = embeddingsMatch
+          }
+        } catch (error) {
+          console.error('Embeddings match failed:', error)
+        }
+      }
+      
+      // Try semantic match using GPT
       if ((!match || match.confidence < 0.7) && this.openai) {
         try {
           const semanticMatch = await this.semanticMatch(target, availableColumns)
-          if (!match || semanticMatch.confidence > match.confidence) {
+          if (!match || (semanticMatch && semanticMatch.confidence > match.confidence)) {
             match = semanticMatch
           }
         } catch (error) {
@@ -72,8 +90,8 @@ export class ColumnMatcher {
       
       // Try pattern matching on data if available
       if ((!match || match.confidence < 0.6) && sampleData) {
-        const patternMatch = this.patternMatch(target, availableColumns, sampleData)
-        if (!match || patternMatch.confidence > match.confidence) {
+        const patternMatch = await this.enhancedPatternMatch(target, availableColumns, sampleData)
+        if (!match || (patternMatch && patternMatch.confidence > match.confidence)) {
           match = patternMatch
         }
       }
@@ -111,20 +129,33 @@ export class ColumnMatcher {
   }
   
   /**
-   * Fuzzy match using Levenshtein distance
+   * Fuzzy match using Levenshtein distance with script awareness
    */
   private fuzzyMatch(
     target: string,
     columns: Array<{ name: string; index: number }>
   ): ColumnMatchResult | null {
-    const normalizedTarget = this.normalizeColumnName(target)
+    const targetInfo = this.normalizeForComparison(target)
     let bestMatch: ColumnMatchResult | null = null
     let bestScore = 0
     
     for (const col of columns) {
-      const normalizedCol = this.normalizeColumnName(col.name)
-      const distance = this.levenshteinDistance(normalizedTarget, normalizedCol)
-      const maxLen = Math.max(normalizedTarget.length, normalizedCol.length)
+      const colInfo = this.normalizeForComparison(col.name)
+      
+      // Skip fuzzy matching between different scripts (won't be meaningful)
+      if (targetInfo.script !== colInfo.script && 
+          targetInfo.hasNonLatin && colInfo.hasNonLatin) {
+        continue
+      }
+      
+      const distance = this.levenshteinDistance(
+        targetInfo.normalized, 
+        colInfo.normalized
+      )
+      const maxLen = Math.max(
+        targetInfo.normalized.length, 
+        colInfo.normalized.length
+      )
       const score = 1 - (distance / maxLen)
       
       if (score > bestScore && score > 0.7) {
@@ -132,7 +163,7 @@ export class ColumnMatcher {
         bestMatch = {
           column: col.name,
           index: col.index,
-          confidence: score * 0.9, // Slightly reduce confidence for fuzzy matches
+          confidence: score * 0.9,
           method: 'fuzzy'
         }
       }
@@ -163,7 +194,7 @@ export class ColumnMatcher {
       if (match) {
         return {
           ...match,
-          confidence: match.confidence * 0.85, // Reduce confidence for synonym matches
+          confidence: match.confidence * 0.85,
           method: 'fuzzy' as const
         }
       }
@@ -173,32 +204,115 @@ export class ColumnMatcher {
   }
   
   /**
-   * Semantic match using OpenAI embeddings or chat
+   * Match columns using embeddings for language-agnostic semantic similarity
+   */
+  private async embeddingsMatch(
+    target: string,
+    columns: Array<{ name: string; index: number }>
+  ): Promise<ColumnMatchResult | null> {
+    try {
+      // Get cached or generate embedding for target
+      const targetEmbedding = await this.getEmbedding(`Column name: ${target}`)
+      
+      // Get embeddings for all columns
+      const columnEmbeddings = await Promise.all(
+        columns.map(async (col) => ({
+          column: col,
+          embedding: await this.getEmbedding(`Column name: ${col.name}`)
+        }))
+      )
+      
+      // Calculate cosine similarities
+      const similarities = columnEmbeddings.map(({ column, embedding }) => ({
+        column,
+        similarity: this.cosineSimilarity(targetEmbedding, embedding)
+      }))
+      
+      // Find best match
+      const bestMatch = similarities.reduce((best, current) => 
+        current.similarity > best.similarity ? current : best
+      )
+      
+      // Only return if similarity is high enough
+      if (bestMatch.similarity > 0.8) {
+        return {
+          column: bestMatch.column.name,
+          index: bestMatch.column.index,
+          confidence: bestMatch.similarity,
+          method: 'semantic'
+        }
+      }
+    } catch (error) {
+      console.error('Embeddings match error:', error)
+    }
+    
+    return null
+  }
+  
+  /**
+   * Get embedding with caching
+   */
+  private async getEmbedding(text: string): Promise<number[]> {
+    const cacheKey = `emb_${text.toLowerCase()}`
+    
+    if (this.embeddingCache.has(cacheKey)) {
+      return this.embeddingCache.get(cacheKey)!
+    }
+    
+    const response = await this.openai.embeddings.create({
+      model: process.env.OPENAI_MODEL_EMBEDDINGS || 'text-embedding-3-small',
+      input: text
+    })
+    
+    const embedding = response.data[0].embedding
+    this.embeddingCache.set(cacheKey, embedding)
+    
+    return embedding
+  }
+  
+  /**
+   * Calculate cosine similarity between two vectors
+   */
+  private cosineSimilarity(a: number[], b: number[]): number {
+    const dotProduct = a.reduce((sum, val, i) => sum + val * b[i], 0)
+    const magnitudeA = Math.sqrt(a.reduce((sum, val) => sum + val * val, 0))
+    const magnitudeB = Math.sqrt(b.reduce((sum, val) => sum + val * val, 0))
+    return dotProduct / (magnitudeA * magnitudeB)
+  }
+  
+  /**
+   * Enhanced semantic match using OpenAI with multilingual support
    */
   private async semanticMatch(
     target: string,
     columns: Array<{ name: string; index: number }>
   ): Promise<ColumnMatchResult | null> {
     const prompt = `
-Given the target column: "${target}"
-And available columns: ${columns.map(c => c.name).join(', ')}
+You are a multilingual data analyst expert at matching column names across different languages.
 
-Which column best matches the target semantically? Consider:
-- Similar meanings (e.g., "vendor" matches "supplier")
-- Language variations (e.g. Thai query "ผู้ขาย" matches Eng column "vendor")
-- Language variations (e.g. Eng query "vendor" matches Thai column "ผู้ขาย")
-- Contextual relevance (e.g., "amount" matches "total")
-- Common abbreviations (e.g., "amt" matches "amount")
-- Domain-specific terms
+Target column concept: "${target}"
+Available columns: ${columns.map(c => `"${c.name}"`).join(', ')}
+
+Your task:
+1. Understand the semantic meaning of the target column (e.g., "payment" refers to financial transactions)
+2. Find columns that represent the SAME CONCEPT regardless of language
+3. Consider these matching scenarios:
+   - Direct translations (e.g., "payment" = "การชำระเงิน" in Thai, "支払い" in Japanese, "pago" in Spanish)
+   - Semantic equivalents (e.g., "vendor" = "supplier" = "ผู้ขาย" = "プロバイダー")
+   - Common abbreviations in any language
+   - Transliterations and romanizations
+   - Mixed language columns (e.g., "Payment_การชำระ")
+
+Important: The target is in English but columns might be in ANY language. You must match based on meaning, not spelling.
 
 Return the best match as JSON:
 {
-  "matchedColumn": "column name",
-  "confidence": 0.8,
-  "reason": "why it matches"
+  "matchedColumn": "exact column name as it appears",
+  "confidence": 0.9,
+  "reason": "why it matches (mention if it's a translation)"
 }
 
-If no good match exists, return {"matchedColumn": null}
+If no semantically equivalent column exists, return {"matchedColumn": null}
 `
 
     try {
@@ -207,7 +321,7 @@ If no good match exists, return {"matchedColumn": null}
         messages: [
           {
             role: 'system',
-            content: 'You are a data analyst expert at matching column names. Only match columns that are truly semantically related.'
+            content: 'You are a multilingual data expert fluent in multiple languages including English, Thai, Japanese, Chinese, Spanish, French, German, and others. Match columns based on semantic meaning across languages.'
           },
           {
             role: 'user',
@@ -222,9 +336,7 @@ If no good match exists, return {"matchedColumn": null}
       const response = JSON.parse(completion.choices[0].message.content || '{}')
       
       if (response.matchedColumn) {
-        const matchedCol = columns.find(c => 
-          this.normalizeColumnName(c.name) === this.normalizeColumnName(response.matchedColumn)
-        )
+        const matchedCol = columns.find(c => c.name === response.matchedColumn)
         
         if (matchedCol) {
           return {
@@ -240,6 +352,30 @@ If no good match exists, return {"matchedColumn": null}
     }
     
     return null
+  }
+  
+  /**
+   * Enhanced pattern match with concept expansion
+   */
+  private async enhancedPatternMatch(
+    target: string,
+    columns: Array<{ name: string; index: number; dataType?: string }>,
+    sampleData: any[][]
+  ): Promise<ColumnMatchResult | null> {
+    // First, expand the target concept
+    const expandedConcepts = await this.expandConcept(target)
+    
+    // Try pattern matching with each expanded concept
+    let bestMatch: ColumnMatchResult | null = null
+    
+    for (const concept of expandedConcepts) {
+      const match = this.patternMatch(concept, columns, sampleData)
+      if (match && (!bestMatch || match.confidence > bestMatch.confidence)) {
+        bestMatch = match
+      }
+    }
+    
+    return bestMatch
   }
   
   /**
@@ -295,6 +431,66 @@ If no good match exists, return {"matchedColumn": null}
   }
   
   /**
+   * Expand a concept to include multilingual variations and synonyms
+   */
+  private async expandConcept(concept: string): Promise<string[]> {
+    if (!this.openai) return [concept]
+    
+    const cacheKey = `concept_${concept.toLowerCase()}`
+    
+    if (this.conceptCache.has(cacheKey)) {
+      return this.conceptCache.get(cacheKey)!
+    }
+    
+    try {
+      const prompt = `
+Given the column concept "${concept}", provide common variations including:
+1. Direct translations in major languages (Thai, Japanese, Chinese, Spanish, etc.)
+2. Common synonyms in English
+3. Common abbreviations
+4. Related business terms
+
+Focus on terms commonly used in business spreadsheets and databases.
+
+Return as JSON array of strings:
+["term1", "term2", "การชำระเงิน", "支払い", ...]
+
+Limit to 10-15 most relevant variations.
+`
+      
+      const completion = await this.openai.chat.completions.create({
+        model: 'gpt-4o-mini',
+        messages: [
+          {
+            role: 'system',
+            content: 'You are a multilingual business data expert. Provide concise, relevant term variations.'
+          },
+          {
+            role: 'user',
+            content: prompt
+          }
+        ],
+        temperature: 0.3,
+        max_tokens: 300
+      })
+      
+      const variations = JSON.parse(completion.choices[0].message.content || '[]')
+      
+      // Always include the original concept
+      const results = [concept, ...variations].filter((v, i, arr) => 
+        v && arr.indexOf(v) === i // Remove duplicates
+      )
+      
+      this.conceptCache.set(cacheKey, results)
+      
+      return results
+    } catch (error) {
+      console.error('Concept expansion error:', error)
+      return [concept]
+    }
+  }
+  
+  /**
    * Get data patterns for common column types
    */
   private getDataPatterns(columnType: string): {
@@ -329,7 +525,6 @@ If no good match exists, return {"matchedColumn": null}
       vendor: {
         validator: (v: any) => {
           const str = String(v)
-          // Vendor names are typically 2-100 chars, may contain letters, numbers, spaces, and common business chars
           return str.length >= 2 && str.length <= 100 && /^[a-zA-Z0-9\s\-&.,\']+$/.test(str)
         },
         minMatches: 0.7
@@ -367,14 +562,53 @@ If no good match exists, return {"matchedColumn": null}
   }
   
   /**
-   * Normalize column names for comparison
+   * Normalize column names for comparison while preserving non-English characters
    */
   private normalizeColumnName(name: string): string {
     return name
       .toLowerCase()
-      .replace(/[_\-\s]+/g, '') // Remove separators
-      .replace(/\W+/g, '') // Remove non-word chars
       .trim()
+      .replace(/[\s_\-]+/g, '') // Remove spaces, underscores, hyphens
+  }
+  
+  /**
+   * More sophisticated normalization that handles multiple scripts
+   */
+  private normalizeForComparison(name: string): {
+    normalized: string
+    original: string
+    hasNonLatin: boolean
+    script?: string
+  } {
+    const original = name.trim()
+    
+    // Basic normalization
+    let normalized = original.toLowerCase()
+    
+    // Detect script type
+    const hasNonLatin = /[^\u0000-\u007F]/.test(original)
+    let script = 'latin'
+    
+    if (/[\u0E00-\u0E7F]/.test(original)) script = 'thai'
+    else if (/[\u3040-\u309F\u30A0-\u30FF]/.test(original)) script = 'japanese'
+    else if (/[\u4E00-\u9FFF]/.test(original)) script = 'chinese'
+    else if (/[\u0600-\u06FF]/.test(original)) script = 'arabic'
+    else if (/[\u0400-\u04FF]/.test(original)) script = 'cyrillic'
+    
+    // Only aggressively normalize Latin text
+    if (!hasNonLatin) {
+      normalized = normalized.replace(/[_\-\s]+/g, '').replace(/\W+/g, '')
+    } else {
+      // For non-Latin scripts, only remove obvious separators
+      normalized = normalized.replace(/[_\-\s]+/g, '')
+    }
+    
+    return {
+      normalized,
+      original,
+      hasNonLatin,
+      script
+    }
   }
   
   /**
@@ -406,5 +640,13 @@ If no good match exists, return {"matchedColumn": null}
     }
     
     return matrix[b.length][a.length]
+  }
+  
+  /**
+   * Clear all caches
+   */
+  clearCaches(): void {
+    this.conceptCache.clear()
+    this.embeddingCache.clear()
   }
 }

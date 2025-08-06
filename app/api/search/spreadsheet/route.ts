@@ -160,94 +160,127 @@ export async function POST(request: NextRequest) {
     }
     
     // Step 4: Process each matched sheet
-    console.log('\n--- Step 4: Processing matched sheets ---')
-    const results: SpreadsheetSearchResult[] = []
+console.log('\n--- Step 4: Processing matched sheets ---')
+const results: SpreadsheetSearchResult[] = []
+
+for (const sheetMatch of relevantSheets) {
+  try {
+    console.log(`\nProcessing: ${sheetMatch.fileName} - ${sheetMatch.sheetName}`)
     
-    for (const sheetMatch of relevantSheets) {
-      try {
-        console.log(`\nProcessing: ${sheetMatch.fileName} - ${sheetMatch.sheetName}`)
-        
-        // Get file metadata
-        const file = files.find(f => f.file_id === sheetMatch.fileId)
-        if (!file) continue
-        
-        const sheetMeta = file.metadata?.sheets?.[sheetMatch.sheetIndex]
-        if (!sheetMeta) {
-          console.log('Sheet metadata not found, skipping')
-          continue
-        }
-        
-        // Step 4a: Match columns
-        const availableColumns = sheetMeta.columns
-          ?.filter((c: any) => c)
-          ?.map((c: any, i: number) => ({
-            name: c.name || `Column ${i + 1}`,
-            index: i,
-            dataType: c.dataType
-          })) || []
-        
-        const matchedColumns = await columnMatcher.matchColumns(
-          intent.targetColumns,
-          availableColumns
-        )
-        
-        console.log(`Matched ${matchedColumns.length} columns:`, 
-          matchedColumns.map(c => `${c.column} (${c.confidence.toFixed(2)})`).join(', ')
-        )
-        
-        // Step 4b: Retrieve data
-        const searchStartTime = Date.now()
-        const sheetData = await dataRetriever.retrieveSheetData(
-          accessToken,
-          file.file_id,
-          file.name,
-          file.mime_type,
-          sheetMatch.sheetName,
-          sheetMatch.sheetIndex,
-          {
-            keyColumns: matchedColumns,
-            filters: intent.filters,
-            includeEmptyRows,
-            maxRows: 1000
-          }
-        )
-        
-        const searchDuration = Date.now() - searchStartTime
-        
-        // Build result
-        const result: SpreadsheetSearchResult = {
-          fileId: file.file_id,
-          fileName: file.name,
-          sheetName: sheetMatch.sheetName,
-          sheetIndex: sheetMatch.sheetIndex,
-          relevanceScore: sheetMatch.relevanceScore,
-          matchedColumns: matchedColumns.map(mc => ({
-            columnName: mc.column,
-            columnLetter: getColumnLetter(mc.index),
-            columnIndex: mc.index,
-            matchConfidence: mc.confidence,
-            matchReason: mc.method
-          })),
-          data: {
-            headers: sheetData.headers,
-            rows: sheetData.rows,
-            totalRowsFound: sheetData.totalRows,
-            truncated: sheetData.truncated
-          },
-          metadata: {
-            totalRows: sheetMeta.totalRows || 0,
-            searchDuration,
-            cacheHit: sheetData.cacheHit
-          }
-        }
-        
-        results.push(result)
-        console.log(`✓ Found ${sheetData.rows.length} rows (${sheetData.cacheHit ? 'cached' : 'fresh'})`)
-        
-      } catch (error: any) {
-        console.error(`✗ Error processing ${sheetMatch.fileName}:`, error.message)
+    // Get file metadata
+    const file = files.find(f => f.file_id === sheetMatch.fileId)
+    if (!file) continue
+    
+    const sheetMeta = file.metadata?.sheets?.[sheetMatch.sheetIndex]
+    if (!sheetMeta) {
+      console.log('Sheet metadata not found, skipping')
+      continue
+    }
+    
+    // Step 4a: Match columns
+    const availableColumns = sheetMeta.columns
+      ?.filter((c: any) => c)
+      ?.map((c: any, i: number) => ({
+        name: c.name || `Column ${i + 1}`,
+        index: i,
+        dataType: c.dataType
+      })) || []
+    
+    const matchedColumns = await columnMatcher.matchColumns(
+      intent.targetColumns,
+      availableColumns
+    )
+    
+    // Step 4b: Find the key column if specified
+    let keyColumnMatch: ColumnMatchResult | undefined
+    if (intent.keyColumn) {
+      console.log(`Looking for key column: "${intent.keyColumn}"`)
+      
+      // Try to match the key column specifically
+      const keyColumnMatches = await columnMatcher.matchColumns(
+        [intent.keyColumn],
+        availableColumns
+      )
+      
+      if (keyColumnMatches.length > 0) {
+        keyColumnMatch = keyColumnMatches[0]
+        keyColumnMatch.isKeyColumn = true
+        console.log(`✓ Matched key column: ${keyColumnMatch.column} (confidence: ${keyColumnMatch.confidence.toFixed(2)})`)
+      } else {
+        console.log(`✗ Could not match key column "${intent.keyColumn}"`)
       }
     }
+    
+    console.log(`Matched ${matchedColumns.length} columns:`, 
+      matchedColumns.map(c => `${c.column} (${c.confidence.toFixed(2)})`).join(', ')
+    )
+    
+    // Step 4c: Retrieve data with key column filtering
+    const searchStartTime = Date.now()
+    const sheetData = await dataRetriever.retrieveSheetData(
+      accessToken,
+      file.file_id,
+      file.name,
+      file.mime_type,
+      sheetMatch.sheetName,
+      sheetMatch.sheetIndex,
+      {
+        keyColumn: keyColumnMatch, // Pass the key column for primary filtering
+        keyColumns: matchedColumns, // Keep for backward compatibility
+        filters: intent.filters,
+        includeEmptyRows,
+        maxRows: 1000
+      }
+    )
+    
+    const searchDuration = Date.now() - searchStartTime
+    
+    // Build result
+    const result: SpreadsheetSearchResult = {
+      fileId: file.file_id,
+      fileName: file.name,
+      sheetName: sheetMatch.sheetName,
+      sheetIndex: sheetMatch.sheetIndex,
+      relevanceScore: sheetMatch.relevanceScore,
+      matchedColumns: matchedColumns.map(mc => ({
+        columnName: mc.column,
+        columnLetter: getColumnLetter(mc.index),
+        columnIndex: mc.index,
+        matchConfidence: mc.confidence,
+        matchReason: mc.method,
+        isKeyColumn: mc.isKeyColumn || false
+      })),
+      keyColumn: keyColumnMatch ? {
+        columnName: keyColumnMatch.column,
+        columnLetter: getColumnLetter(keyColumnMatch.index),
+        columnIndex: keyColumnMatch.index,
+        matchConfidence: keyColumnMatch.confidence,
+        matchReason: keyColumnMatch.method,
+        isKeyColumn: true
+      } : undefined,
+      data: {
+        headers: sheetData.headers,
+        rows: sheetData.rows,
+        totalRowsFound: sheetData.totalRows,
+        truncated: sheetData.truncated
+      },
+      metadata: {
+        totalRows: sheetMeta.totalRows || 0,
+        searchDuration,
+        cacheHit: sheetData.cacheHit,
+        filteredByKeyColumn: !!keyColumnMatch,
+        rowsBeforeKeyFilter: sheetData.rowsBeforeKeyFilter
+      }
+    }
+    
+    results.push(result)
+    const keyColumnInfo = keyColumnMatch ? ` (filtered by ${keyColumnMatch.column})` : ''
+    console.log(`✓ Found ${sheetData.rows.length} rows${keyColumnInfo} (${sheetData.cacheHit ? 'cached' : 'fresh'})`)
+    
+  } catch (error: any) {
+    console.error(`✗ Error processing ${sheetMatch.fileName}:`, error.message)
+  }
+}
     
     // Final summary
     const duration = Date.now() - startTime

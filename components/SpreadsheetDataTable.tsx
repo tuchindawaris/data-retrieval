@@ -8,13 +8,17 @@ interface SpreadsheetDataTableProps {
   headers: string[]
   rows: any[][]
   matchedColumns?: number[]
+  keyColumnIndex?: number // Add key column index
 }
+
 
 export default function SpreadsheetDataTable({ 
   headers, 
   rows, 
-  matchedColumns = [] 
+  matchedColumns = [],
+  keyColumnIndex
 }: SpreadsheetDataTableProps) {
+
   const [sortColumn, setSortColumn] = useState<number | null>(null)
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc')
   const [filterValues, setFilterValues] = useState<Record<number, string>>({})
@@ -129,6 +133,32 @@ export default function SpreadsheetDataTable({
     }
   }
   
+    const getColumnClass = (colIndex: number) => {
+    const classes = []
+    
+    if (keyColumnIndex === colIndex) {
+      classes.push('bg-purple-50 border-x-2 border-purple-200')
+    } else if (matchedColumns.includes(colIndex)) {
+      classes.push('bg-green-50')
+    }
+    
+    return classes.join(' ')
+  }
+  
+  // Helper to get header styling
+  const getHeaderClass = (colIndex: number) => {
+    const baseClass = 'px-3 py-2 text-left text-xs font-medium uppercase tracking-wider cursor-pointer hover:bg-gray-100'
+    
+    if (keyColumnIndex === colIndex) {
+      return `${baseClass} bg-purple-100 text-purple-900 border-x-2 border-purple-200`
+    } else if (matchedColumns.includes(colIndex)) {
+      return `${baseClass} bg-green-100 text-green-900`
+    }
+    
+    return `${baseClass} text-gray-500`
+  }
+  
+
   return (
     <div>
       {/* Table Controls */}
@@ -176,6 +206,17 @@ export default function SpreadsheetDataTable({
           </select>
         </div>
       </div>
+      {/* Add legend for highlighting */}
+      <div className="mb-2 flex items-center gap-4 text-xs">
+        <div className="flex items-center gap-1">
+          <div className="w-4 h-4 bg-purple-100 border border-purple-300 rounded"></div>
+          <span className="text-gray-600">Key Column (Grouped By)</span>
+        </div>
+        <div className="flex items-center gap-1">
+          <div className="w-4 h-4 bg-green-100 border border-green-300 rounded"></div>
+          <span className="text-gray-600">Matched Columns</span>
+        </div>
+      </div>
       
       {/* Table */}
       <div className="overflow-x-auto border border-gray-200 rounded-lg">
@@ -188,9 +229,7 @@ export default function SpreadsheetDataTable({
               {headers.map((header, i) => (
                 <th
                   key={i}
-                  className={`px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100 ${
-                    matchedColumns.includes(i) ? 'bg-green-50' : ''
-                  }`}
+                  className={getHeaderClass(i)}
                   onClick={() => handleSort(i)}
                 >
                   <div className="flex items-center gap-1">
@@ -200,7 +239,12 @@ export default function SpreadsheetDataTable({
                         {sortDirection === 'asc' ? '↑' : '↓'}
                       </span>
                     )}
-                    {matchedColumns.includes(i) && (
+                    {keyColumnIndex === i && (
+                      <span className="ml-1 px-1.5 py-0.5 bg-purple-200 text-purple-800 text-xs rounded-full">
+                        KEY
+                      </span>
+                    )}
+                    {matchedColumns.includes(i) && keyColumnIndex !== i && (
                       <span className="text-green-600" title="Matched column">✓</span>
                     )}
                   </div>
@@ -208,12 +252,12 @@ export default function SpreadsheetDataTable({
               ))}
             </tr>
             
-            {/* Filter Row */}
+            {/* Filter Row - update with key column highlighting */}
             {showFilters && (
               <tr className="bg-blue-50">
                 <td className="px-3 py-2"></td>
                 {headers.map((_, i) => (
-                  <td key={i} className="px-3 py-2">
+                  <td key={i} className={`px-3 py-2 ${keyColumnIndex === i ? 'bg-purple-50' : ''}`}>
                     <input
                       type="text"
                       placeholder="Filter..."
@@ -246,9 +290,7 @@ export default function SpreadsheetDataTable({
                   {row.map((cell, cellIndex) => (
                     <td
                       key={cellIndex}
-                      className={`px-3 py-2 text-sm text-gray-900 ${
-                        matchedColumns.includes(cellIndex) ? 'bg-green-50 font-medium' : ''
-                      }`}
+                      className={`px-3 py-2 text-sm text-gray-900 ${getColumnClass(cellIndex)}`}
                     >
                       <div className="max-w-xs truncate" title={String(cell || '')}>
                         {formatCellValue(cell)}

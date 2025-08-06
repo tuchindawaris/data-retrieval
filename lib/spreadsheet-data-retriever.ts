@@ -6,10 +6,12 @@ import { CachedSpreadsheet, CachedSheet, SearchFilter, ColumnMatchResult } from 
 
 interface RetrieveOptions {
   keyColumns?: ColumnMatchResult[]
+  keyColumn?: ColumnMatchResult // The primary filtering column
   filters?: SearchFilter[]
   maxRows?: number
   includeEmptyRows?: boolean
 }
+
 
 export class SpreadsheetDataRetriever {
   private cache: Map<string, CachedSpreadsheet>
@@ -30,13 +32,14 @@ export class SpreadsheetDataRetriever {
     sheetName: string,
     sheetIndex: number,
     options: RetrieveOptions = {}
-  ): Promise<{
+    ): Promise<{
     headers: string[]
     rows: any[][]
     totalRows: number
     truncated: boolean
     cacheHit: boolean
-  }> {
+    rowsBeforeKeyFilter?: number
+    }> {
     const startTime = Date.now()
     
     // Check cache first
@@ -47,47 +50,54 @@ export class SpreadsheetDataRetriever {
     let cacheHit = false
     
     if (cached) {
-      sheetData = cached
-      cacheHit = true
-      console.log(`Cache hit for ${fileName}:${sheetName}`)
+        sheetData = cached
+        cacheHit = true
+        console.log(`Cache hit for ${fileName}:${sheetName}`)
     } else {
-      console.log(`Loading ${fileName}:${sheetName} from Drive...`)
-      sheetData = await this.loadSheetFromDrive(
+        console.log(`Loading ${fileName}:${sheetName} from Drive...`)
+        sheetData = await this.loadSheetFromDrive(
         accessToken,
         fileId,
         fileName,
         mimeType,
         sheetName,
         sheetIndex
-      )
-      
-      // Cache the data
-      this.cacheSheet(fileId, fileName, sheetData)
+        )
+        
+        // Cache the data
+        this.cacheSheet(fileId, fileName, sheetData)
     }
+
     
     // Apply filters and extract relevant rows
     const filteredData = this.filterData(
-      sheetData,
-      options.keyColumns,
-      options.filters,
-      options.includeEmptyRows
+        sheetData,
+        options.keyColumn, // Pass the key column separately
+        options.keyColumns,
+        options.filters,
+        options.includeEmptyRows
     )
+
     
     // Apply row limit
-    const maxRows = options.maxRows || 1000
-    const truncated = filteredData.rows.length > maxRows
-    const finalRows = filteredData.rows.slice(0, maxRows)
-    
-    console.log(`Retrieved ${finalRows.length} rows (${truncated ? 'truncated' : 'complete'}) in ${Date.now() - startTime}ms`)
-    
-    return {
-      headers: filteredData.headers,
-      rows: finalRows,
-      totalRows: filteredData.rows.length,
-      truncated,
-      cacheHit
-    }
+  const maxRows = options.maxRows || 1000
+  const truncated = filteredData.rows.length > maxRows
+  const finalRows = filteredData.rows.slice(0, maxRows)
+  
+  console.log(`Retrieved ${finalRows.length} rows (${truncated ? 'truncated' : 'complete'}) in ${Date.now() - startTime}ms`)
+  if (filteredData.rowsBeforeKeyFilter !== undefined) {
+    console.log(`Key column filter: ${filteredData.rowsBeforeKeyFilter} → ${filteredData.rows.length} rows`)
   }
+  
+  return {
+    headers: filteredData.headers,
+    rows: finalRows,
+    totalRows: filteredData.rows.length,
+    truncated,
+    cacheHit,
+    rowsBeforeKeyFilter: filteredData.rowsBeforeKeyFilter
+  }
+}
   
   /**
    * Load sheet data from Google Drive
@@ -178,52 +188,73 @@ export class SpreadsheetDataRetriever {
    * Filter data based on key columns and filters
    */
   private filterData(
-    sheet: CachedSheet,
-    keyColumns?: ColumnMatchResult[],
-    filters?: SearchFilter[],
-    includeEmptyRows: boolean = false
-  ): {
-    headers: string[]
-    rows: any[][]
-  } {
-    let headers = sheet.headers
-    let rows = sheet.data
-    
-    // Filter out completely empty rows unless requested
-    if (!includeEmptyRows) {
-      rows = rows.filter(row => 
-        row.some(cell => cell !== null && cell !== undefined && cell !== '')
-      )
-    }
-    
-    // Apply column filters
-    if (filters && filters.length > 0) {
-      rows = rows.filter(row => {
-        return filters.every(filter => {
-          const colIndex = headers.findIndex(h => 
-            h.toLowerCase().includes(filter.column.toLowerCase())
-          )
-          
-          if (colIndex === -1) return true // Skip if column not found
-          
-          const value = row[colIndex]
-          return this.evaluateFilter(value, filter)
-        })
-      })
-    }
-    
-    // If key columns specified, filter rows that have non-empty values in those columns
-    if (keyColumns && keyColumns.length > 0) {
-      rows = rows.filter(row => {
-        return keyColumns.some(col => {
-          const value = row[col.index]
-          return value !== null && value !== undefined && value !== ''
-        })
-      })
-    }
-    
-    return { headers, rows }
+  sheet: CachedSheet,
+  keyColumn?: ColumnMatchResult,
+  additionalColumns?: ColumnMatchResult[],
+  filters?: SearchFilter[],
+  includeEmptyRows: boolean = false
+): {
+  headers: string[]
+  rows: any[][]
+  rowsBeforeKeyFilter?: number
+} {
+  let headers = sheet.headers
+  let rows = sheet.data
+  let rowsBeforeKeyFilter: number | undefined
+  
+  // Filter out completely empty rows unless requested
+  if (!includeEmptyRows) {
+    rows = rows.filter(row => 
+      row.some(cell => cell !== null && cell !== undefined && cell !== '')
+    )
   }
+  
+  // IMPORTANT: Apply key column filter FIRST for efficiency
+  if (keyColumn) {
+    rowsBeforeKeyFilter = rows.length
+    
+    console.log(`Filtering by key column: ${keyColumn.column} (index: ${keyColumn.index})`)
+    
+    rows = rows.filter(row => {
+      const value = row[keyColumn.index]
+      // Keep only rows where key column has non-empty, non-whitespace values
+      return value !== null && 
+             value !== undefined && 
+             value !== '' &&
+             String(value).trim() !== ''
+    })
+    
+    console.log(`Key column filter: ${rowsBeforeKeyFilter} → ${rows.length} rows`)
+  }
+  
+  // Apply additional filters
+  if (filters && filters.length > 0) {
+    rows = rows.filter(row => {
+      return filters.every(filter => {
+        const colIndex = headers.findIndex(h => 
+          h.toLowerCase().includes(filter.column.toLowerCase())
+        )
+        
+        if (colIndex === -1) return true // Skip if column not found
+        
+        const value = row[colIndex]
+        return this.evaluateFilter(value, filter)
+      })
+    })
+  }
+  
+  // If additional key columns specified (for backward compatibility)
+  if (additionalColumns && additionalColumns.length > 0 && !keyColumn) {
+    rows = rows.filter(row => {
+      return additionalColumns.some(col => {
+        const value = row[col.index]
+        return value !== null && value !== undefined && value !== ''
+      })
+    })
+  }
+  
+  return { headers, rows, rowsBeforeKeyFilter }
+}
   
   /**
    * Evaluate a single filter condition

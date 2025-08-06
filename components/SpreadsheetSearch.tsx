@@ -198,26 +198,41 @@ export default function SpreadsheetSearch({
       {/* Search Intent Display */}
       {searchIntent && !loading && (
         <div className="bg-blue-50 border border-blue-200 p-4 rounded-lg mb-6">
-          <h4 className="font-medium text-blue-900 mb-2">Search Analysis</h4>
-          <div className="text-sm text-blue-800">
+            <h4 className="font-medium text-blue-900 mb-2">Search Analysis</h4>
+            <div className="text-sm text-blue-800">
             <div>
-              <span className="font-medium">Type:</span> {searchIntent.type}
+                <span className="font-medium">Type:</span> {searchIntent.type}
             </div>
+            {searchIntent.keyColumn && (
+                <div className="mt-1">
+                <span className="font-medium">Grouping by:</span> 
+                <span className="ml-1 px-2 py-0.5 bg-purple-100 text-purple-800 rounded">
+                    {searchIntent.keyColumn}
+                </span>
+                <span className="text-xs ml-2 text-blue-600">
+                    (Only showing rows with non-empty values in this column)
+                </span>
+                </div>
+            )}
             {searchIntent.targetColumns?.length > 0 && (
-              <div>
-                <span className="font-medium">Looking for columns:</span> {searchIntent.targetColumns.join(', ')}
-              </div>
+                <div>
+                <span className="font-medium">Looking for columns:</span> {searchIntent.targetColumns
+                    .filter(col => col !== searchIntent.keyColumn) // Don't duplicate key column
+                    .slice(0, 5)
+                    .join(', ')}
+                {searchIntent.targetColumns.length > 5 && '...'}
+                </div>
             )}
             {searchIntent.filters?.length > 0 && (
-              <div>
+                <div>
                 <span className="font-medium">Filters:</span> {searchIntent.filters.map((f: any) => 
-                  `${f.column} ${f.operator} ${f.value}`
+                    `${f.column} ${f.operator} ${f.value}`
                 ).join(', ')}
-              </div>
+                </div>
             )}
-          </div>
+            </div>
         </div>
-      )}
+        )}
 
       {/* Search Summary */}
       {searchDuration !== null && results.length > 0 && (

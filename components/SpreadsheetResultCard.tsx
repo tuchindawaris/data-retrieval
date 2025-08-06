@@ -16,6 +16,7 @@ export default function SpreadsheetResultCard({ result, rank }: SpreadsheetResul
   const [showRawData, setShowRawData] = useState(false)
   
   const relevancePercentage = Math.round(result.relevanceScore * 100)
+
   
   // Get relevance color
   const getRelevanceColor = (score: number) => {
