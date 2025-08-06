@@ -193,21 +193,21 @@ export default function GoogleDriveTab({ user, hasGoogleAuth }: GoogleDriveTabPr
               onClick={() => setViewMode('indexer')}
               className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${
                 viewMode === 'indexer'
-                  ? 'bg-green-100 text-green-700'
+                  ? 'bg-gray-900 text-white'
                   : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
               }`}
             >
-              📁 Manage Files
+              Manage Files
             </button>
             <button
               onClick={() => setViewMode('search')}
               className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${
                 viewMode === 'search'
-                  ? 'bg-blue-100 text-blue-700'
+                  ? 'bg-gray-900 text-white'
                   : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
               }`}
             >
-              🔍 Search Files
+              Search Files
             </button>
           </div>
           

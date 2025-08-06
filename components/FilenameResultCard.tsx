@@ -25,46 +25,46 @@ export default function FilenameResultCard({ result, rank }: FilenameResultCardP
     
     // Images
     if (mimeType.startsWith('image/') || ['jpg', 'jpeg', 'png', 'gif', 'svg', 'webp', 'bmp'].includes(extension)) {
-      return { icon: '🖼️', color: 'text-purple-600', type: 'Image' }
+      return { type: 'Image', color: 'text-purple-600', bgColor: 'bg-purple-100' }
     }
     
     // Videos
     if (mimeType.startsWith('video/') || ['mp4', 'avi', 'mov', 'wmv', 'flv', 'mkv'].includes(extension)) {
-      return { icon: '🎥', color: 'text-red-600', type: 'Video' }
+      return { type: 'Video', color: 'text-red-600', bgColor: 'bg-red-100' }
     }
     
     // Audio
     if (mimeType.startsWith('audio/') || ['mp3', 'wav', 'flac', 'aac', 'm4a'].includes(extension)) {
-      return { icon: '🎵', color: 'text-pink-600', type: 'Audio' }
+      return { type: 'Audio', color: 'text-pink-600', bgColor: 'bg-pink-100' }
     }
     
     // PDFs
     if (mimeType === 'application/pdf' || extension === 'pdf') {
-      return { icon: '📑', color: 'text-red-700', type: 'PDF' }
+      return { type: 'PDF', color: 'text-red-700', bgColor: 'bg-red-100' }
     }
     
     // Archives
     if (['zip', 'rar', '7z', 'tar', 'gz'].includes(extension)) {
-      return { icon: '📦', color: 'text-yellow-600', type: 'Archive' }
+      return { type: 'Archive', color: 'text-yellow-600', bgColor: 'bg-yellow-100' }
     }
     
     // Presentations
     if (mimeType.includes('presentation') || ['ppt', 'pptx', 'odp'].includes(extension)) {
-      return { icon: '📊', color: 'text-orange-600', type: 'Presentation' }
+      return { type: 'Presentation', color: 'text-orange-600', bgColor: 'bg-orange-100' }
     }
     
     // Code
     if (['js', 'ts', 'py', 'java', 'cpp', 'c', 'h', 'css', 'html', 'jsx', 'tsx', 'json', 'xml', 'yml', 'yaml'].includes(extension)) {
-      return { icon: '💻', color: 'text-green-600', type: 'Code' }
+      return { type: 'Code', color: 'text-green-600', bgColor: 'bg-green-100' }
     }
     
     // Design files
     if (['psd', 'ai', 'sketch', 'fig', 'xd'].includes(extension)) {
-      return { icon: '🎨', color: 'text-indigo-600', type: 'Design' }
+      return { type: 'Design', color: 'text-indigo-600', bgColor: 'bg-indigo-100' }
     }
     
     // Default
-    return { icon: '📄', color: 'text-gray-600', type: 'File' }
+    return { type: 'File', color: 'text-gray-600', bgColor: 'bg-gray-100' }
   }
   
   const fileInfo = getFileTypeInfo(result.fileName, result.mimeType)
@@ -95,7 +95,9 @@ export default function FilenameResultCard({ result, rank }: FilenameResultCardP
           <div className="flex-1">
             <div className="flex items-center gap-3 mb-1">
               <span className="text-sm font-medium text-gray-500">#{rank}</span>
-              <span className={`text-2xl ${fileInfo.color}`}>{fileInfo.icon}</span>
+              <span className={`px-2 py-1 text-xs font-medium rounded ${fileInfo.bgColor} ${fileInfo.color}`}>
+                {fileInfo.type}
+              </span>
               <h3 className="text-lg font-medium text-gray-900 truncate max-w-md" title={result.fileName}>
                 {result.fileName}
               </h3>

@@ -43,7 +43,7 @@ export default function KnowledgeMapPage() {
       {/* Main Header */}
       <div className="bg-white border-b">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
-          <h2 className="text-lg font-medium">Knowledge Map</h2>
+          <h2 className="text-xl font-semibold text-gray-900">Knowledge Map</h2>
         </div>
       </div>
 
@@ -55,13 +55,14 @@ export default function KnowledgeMapPage() {
               disabled={true}
               className="py-2 px-1 border-b-2 font-medium text-sm border-transparent text-gray-300 cursor-not-allowed"
             >
-              SQL Database (Coming Soon)
+              SQL Database
+              <span className="ml-2 text-xs">(Coming Soon)</span>
             </button>
             <button
               onClick={() => setActiveTab('drive')}
-              className={`py-2 px-1 border-b-2 font-medium text-sm ${
+              className={`py-2 px-1 border-b-2 font-medium text-sm transition-colors ${
                 activeTab === 'drive'
-                  ? 'border-green-500 text-green-600'
+                  ? 'border-gray-900 text-gray-900'
                   : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
               }`}
             >

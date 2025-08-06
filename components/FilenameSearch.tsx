@@ -96,7 +96,7 @@ export default function FilenameSearch({
               onChange={(e) => setQuery(e.target.value)}
               onKeyPress={handleKeyPress}
               placeholder="Search for files by name... (e.g., 'presentation', 'budget report', 'design mockup')"
-              className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-gray-500 resize-none"
+              className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-gray-500 focus:border-transparent resize-none"
               rows={2}
             />
           </div>
@@ -104,15 +104,15 @@ export default function FilenameSearch({
             <button
               onClick={handleSearch}
               disabled={loading || !query.trim()}
-              className="px-6 py-3 bg-gray-700 text-white rounded-lg hover:bg-gray-800 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors"
+              className="px-6 py-3 bg-gray-700 text-white rounded-lg hover:bg-gray-800 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors font-medium"
             >
               {loading ? 'Searching...' : 'Search'}
             </button>
             <button
               onClick={() => setShowSettings(!showSettings)}
-              className="px-4 py-2 text-sm text-gray-600 hover:text-gray-800 border border-gray-300 rounded-lg hover:bg-gray-50"
+              className="px-4 py-2 text-sm text-gray-600 hover:text-gray-800 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
             >
-              ⚙️ Settings
+              Settings
             </button>
           </div>
         </div>
@@ -207,8 +207,8 @@ export default function FilenameSearch({
           <div className="mt-4 text-xs text-gray-400">
             <p>Currently searching file types that are not:</p>
             <ul className="mt-2 space-y-1">
-              <li>📊 Spreadsheets (use Spreadsheet Search)</li>
-              <li>📄 Documents (use Document Search)</li>
+              <li>• Spreadsheets (use Spreadsheet Search)</li>
+              <li>• Documents (use Document Search)</li>
             </ul>
           </div>
         </div>

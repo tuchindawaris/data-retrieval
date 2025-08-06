@@ -172,7 +172,7 @@ export default function SpreadsheetDataTable({
                 : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
             }`}
           >
-            🔽 Filters {Object.keys(filterValues).length > 0 && `(${Object.keys(filterValues).length})`}
+            Filters {Object.keys(filterValues).length > 0 && `(${Object.keys(filterValues).length})`}
           </button>
           
           {Object.keys(filterValues).length > 0 && (

@@ -92,7 +92,7 @@ export default function SemanticSearch({
               onChange={(e) => setQuery(e.target.value)}
               onKeyPress={handleKeyPress}
               placeholder="Ask a question about your documents..."
-              className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
+              className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none"
               rows={2}
             />
           </div>
@@ -100,15 +100,15 @@ export default function SemanticSearch({
             <button
               onClick={handleSearch}
               disabled={loading || !query.trim()}
-              className="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors"
+              className="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors font-medium"
             >
               {loading ? 'Searching...' : 'Search'}
             </button>
             <button
               onClick={() => setShowSettings(!showSettings)}
-              className="px-4 py-2 text-sm text-gray-600 hover:text-gray-800 border border-gray-300 rounded-lg hover:bg-gray-50"
+              className="px-4 py-2 text-sm text-gray-600 hover:text-gray-800 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
             >
-              ⚙️ Settings
+              Settings
             </button>
           </div>
         </div>
@@ -123,7 +123,7 @@ export default function SemanticSearch({
               <div className="flex items-center gap-2">
                 <input
                   type="range"
-                  min="0.5"
+                  min="0.1"
                   max="0.9"
                   step="0.05"
                   value={matchThreshold}
@@ -199,4 +199,3 @@ export default function SemanticSearch({
     </div>
   )
 }
-

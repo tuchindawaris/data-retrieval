@@ -12,10 +12,7 @@ export default function Navbar() {
     <header className="bg-white shadow-sm border-b">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex justify-between items-center h-16">
-          {/* Logo/Home Link */}
-          <Link href="/" className="flex items-center">
-            <h1 className="text-xl font-semibold text-gray-900">Data Retrieval Agent</h1>
-          </Link>
+          
 
           {/* Navigation Links */}
           <nav className="hidden md:flex items-center space-x-6">
@@ -23,7 +20,7 @@ export default function Navbar() {
               href="/"
               className={`text-sm font-medium transition-colors ${
                 pathname === '/' 
-                  ? 'text-blue-600' 
+                  ? 'text-black' 
                   : 'text-gray-700 hover:text-gray-900'
               }`}
             >
@@ -33,7 +30,7 @@ export default function Navbar() {
               href="/knowledge-map"
               className={`text-sm font-medium transition-colors ${
                 pathname === '/knowledge-map' 
-                  ? 'text-blue-600' 
+                  ? 'text-black' 
                   : 'text-gray-700 hover:text-gray-900'
               }`}
             >

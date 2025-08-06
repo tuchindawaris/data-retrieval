@@ -18,7 +18,7 @@ interface GoogleDriveIndexerProps {
 
 const FILE_GROUPS = {
   spreadsheet: {
-    color: '#10b981', // green
+    color: '#059669', // emerald-600
     label: 'Spreadsheets',
     extensions: ['xlsx', 'xls', 'csv', 'ods'],
     mimeTypes: [
@@ -30,7 +30,7 @@ const FILE_GROUPS = {
     ]
   },
   document: {
-    color: '#3b82f6', // blue
+    color: '#2563eb', // blue-600
     label: 'Documents',
     extensions: ['txt', 'md', 'doc', 'docx', 'rtf', 'odt'],
     mimeTypes: [
@@ -44,8 +44,8 @@ const FILE_GROUPS = {
     ]
   },
   unsupported: {
-    color: '#6b7280', // gray
-    label: 'Not Supported Yet',
+    color: '#6b7280', // gray-500
+    label: 'Other Files',
     extensions: [],
     mimeTypes: []
   }
@@ -81,9 +81,6 @@ export default function GoogleDriveIndexer({
   const [syncing, setSyncing] = useState(false)
   const [deletingFolder, setDeletingFolder] = useState<string | null>(null)
   const [clearingAll, setClearingAll] = useState(false)
-  const [generateSummariesOnIndex, setGenerateSummariesOnIndex] = useState(false)
-  const [generatingSummaries, setGeneratingSummaries] = useState(false)
-  const [generatingEmbeddings, setGeneratingEmbeddings] = useState(false)
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set())
   const [expandedSpreadsheets, setExpandedSpreadsheets] = useState<Set<string>>(new Set())
 
@@ -143,10 +140,7 @@ export default function GoogleDriveIndexer({
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
-        body: JSON.stringify({ 
-          folderId,
-          generateSummaries: generateSummariesOnIndex 
-        }),
+        body: JSON.stringify({ folderId }),
       })
       
       const data = await response.json()
@@ -157,10 +151,8 @@ export default function GoogleDriveIndexer({
         
         let message = `Folder indexed successfully!\n`
         message += `- Files indexed: ${data.indexed}\n`
-        
-        if (generateSummariesOnIndex && data.summariesGenerated !== undefined) {
-          message += `- Summaries generated: ${data.summariesGenerated}`
-        }
+        message += `- Summaries generated: ${data.summariesGenerated || 0}\n`
+        message += `- Embeddings generated: ${data.embeddingsGenerated || 0}`
         
         alert(message)
       } else {
@@ -227,84 +219,6 @@ export default function GoogleDriveIndexer({
     }
   }
 
-  async function generateSummariesForFiles() {
-    if (!confirm('Generate AI summaries for all files? This will use your OpenAI API quota.')) {
-      return
-    }
-    
-    setGeneratingSummaries(true)
-    
-    try {
-      const response = await fetch('/api/drive/generate-summaries', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({}),
-      })
-      
-      const data = await response.json()
-      
-      if (response.ok) {
-        await onDataChange()
-        let message = `Successfully generated summaries!\n`
-        message += `- Processed: ${data.processed} files\n`
-        message += `- Updated: ${data.updated} files\n`
-        message += `- Failed: ${data.failed} files\n`
-        message += `- Skipped: ${data.skipped} files\n`
-        message += `- Tokens used: ${data.tokensUsed || 0}\n`
-        message += `- Duration: ${(data.duration / 1000).toFixed(1)}s`
-        alert(message)
-      } else {
-        alert(`Failed to generate summaries: ${data.error || 'Unknown error'}`)
-      }
-    } catch (error) {
-      alert('Error generating summaries')
-    } finally {
-      setGeneratingSummaries(false)
-    }
-  }
-
-  async function generateEmbeddingsForDocuments() {
-    const confirmMessage = embeddingStats && embeddingStats.embeddedDocuments > 0
-      ? `Generate embeddings for documents? ${embeddingStats.embeddedDocuments}/${embeddingStats.totalDocuments} documents already have embeddings. This will use your OpenAI API quota.`
-      : 'Generate embeddings for all documents? This will use your OpenAI API quota.'
-      
-    if (!confirm(confirmMessage)) {
-      return
-    }
-    
-    setGeneratingEmbeddings(true)
-    
-    try {
-      const response = await fetch('/api/drive/generate-embeddings', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({ forceRegenerate: false }),
-      })
-      
-      const data = await response.json()
-      
-      if (response.ok) {
-        await onDataChange()
-        let message = `Successfully generated embeddings!\n`
-        message += `- Documents processed: ${data.processed}\n`
-        message += `- Documents embedded: ${data.embedded}\n`
-        message += `- Total chunks: ${data.totalChunks || 0}\n`
-        message += `- Failed: ${data.failed}\n`
-        message += `- Tokens used: ${data.tokensUsed || 0}\n`
-        message += `- Duration: ${(data.duration / 1000).toFixed(1)}s`
-        alert(message)
-      } else {
-        alert(`Failed to generate embeddings: ${data.error || 'Unknown error'}`)
-      }
-    } catch (error) {
-      alert('Error generating embeddings')
-    } finally {
-      setGeneratingEmbeddings(false)
-    }
-  }
-
   async function resyncFolder(folderId: string, folderName: string) {
     if (!confirm(`Resync "${folderName}" with the latest files from Google Drive?`)) {
       return
@@ -317,10 +231,7 @@ export default function GoogleDriveIndexer({
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
-        body: JSON.stringify({ 
-          folderId,
-          generateSummaries: generateSummariesOnIndex 
-        }),
+        body: JSON.stringify({ folderId }),
       })
       
       const data = await response.json()
@@ -330,10 +241,8 @@ export default function GoogleDriveIndexer({
         
         let message = data.resynced ? 'Folder resynced successfully!\n' : 'Folder indexed successfully!\n'
         message += `- Files updated: ${data.indexed}\n`
-        
-        if (data.summariesGenerated !== undefined && data.summariesGenerated > 0) {
-          message += `- Summaries generated: ${data.summariesGenerated}`
-        }
+        message += `- Summaries generated: ${data.summariesGenerated || 0}\n`
+        message += `- Embeddings generated: ${data.embeddingsGenerated || 0}`
         
         alert(message)
       } else {
@@ -374,32 +283,32 @@ export default function GoogleDriveIndexer({
     const isExpanded = expandedFolders.has(node.id)
     
     return (
-      <div key={node.id} className="mb-2">
+      <div key={node.id} className="mb-1">
         <div 
-          className="flex items-center gap-2 p-2 hover:bg-gray-100 rounded cursor-pointer"
+          className="flex items-center gap-2 py-2 px-2 hover:bg-gray-50 rounded-md cursor-pointer transition-colors"
           style={{ paddingLeft: `${level * 20 + 8}px` }}
         >
           <button 
             onClick={() => toggleFolder(node.id)}
-            className="text-gray-500 hover:text-gray-700"
+            className="text-gray-400 hover:text-gray-600 transition-colors"
           >
             {isExpanded ? '▼' : '▶'}
           </button>
           
-          <svg className="w-5 h-5 text-yellow-600" fill="currentColor" viewBox="0 0 20 20">
+          <svg className="w-5 h-5 text-gray-600" fill="currentColor" viewBox="0 0 20 20">
             <path d="M2 6a2 2 0 012-2h5l2 2h5a2 2 0 012 2v6a2 2 0 01-2 2H4a2 2 0 01-2-2V6z" />
           </svg>
           
-          <span className="font-medium flex-1">{node.name}</span>
+          <span className="font-medium text-gray-900 flex-1">{node.name}</span>
           
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
             <button
               onClick={(e) => {
                 e.stopPropagation()
                 resyncFolder(node.id, node.name)
               }}
               disabled={syncing}
-              className="text-blue-600 hover:text-blue-800 text-sm px-2 py-1"
+              className="text-blue-600 hover:text-blue-700 text-sm px-2 py-1 transition-colors"
             >
               Resync
             </button>
@@ -410,7 +319,7 @@ export default function GoogleDriveIndexer({
                 deleteFolder(node.id)
               }}
               disabled={deletingFolder === node.id}
-              className="text-red-600 hover:text-red-800 text-sm px-2 py-1"
+              className="text-red-600 hover:text-red-700 text-sm px-2 py-1 transition-colors"
             >
               {deletingFolder === node.id ? 'Deleting...' : 'Delete'}
             </button>
@@ -432,12 +341,12 @@ export default function GoogleDriveIndexer({
               return (
                 <div key={file.id}>
                   <div
-                    className={`flex items-center gap-2 p-2 hover:bg-gray-50 rounded ${isSpreadsheet ? 'cursor-pointer' : ''}`}
+                    className={`flex items-center gap-2 py-1.5 px-2 hover:bg-gray-50 rounded-md transition-colors ${isSpreadsheet ? 'cursor-pointer' : ''}`}
                     style={{ paddingLeft: `${(level + 1) * 20 + 28}px` }}
                     onClick={() => isSpreadsheet && toggleSpreadsheet(file.file_id)}
                   >
                     {isSpreadsheet && (
-                      <button className="text-gray-500 hover:text-gray-700 text-xs">
+                      <button className="text-gray-400 hover:text-gray-600 text-xs transition-colors">
                         {isExpandedSpreadsheet ? '▼' : '▶'}
                       </button>
                     )}
@@ -447,7 +356,7 @@ export default function GoogleDriveIndexer({
                     />
                     <span className="text-sm text-gray-700">{file.name}</span>
                     {group.key === 'unsupported' && (
-                      <span className="text-xs text-gray-500 italic ml-2">(not supported yet)</span>
+                      <span className="text-xs text-gray-500 italic ml-2">(not indexed)</span>
                     )}
                     {isSpreadsheet && file.metadata?.sheets && (
                       <span className="text-xs text-gray-500">
@@ -468,9 +377,9 @@ export default function GoogleDriveIndexer({
                   {isSpreadsheet && isExpandedSpreadsheet && file.metadata?.sheets && (
                     <div style={{ paddingLeft: `${(level + 2) * 20 + 28}px` }}>
                       {file.metadata.sheets.map((sheet: any, sheetIndex: number) => (
-                        <div key={sheetIndex} className="mb-2">
-                          <div className="flex items-center gap-2 p-1 text-xs text-gray-600">
-                            <svg className="w-4 h-4 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <div key={sheetIndex} className="mb-1">
+                          <div className="flex items-center gap-2 py-1 text-xs text-gray-600">
+                            <svg className="w-4 h-4 text-emerald-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 17V7m0 10a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2h2a2 2 0 012 2m0 10a2 2 0 002 2h2a2 2 0 002-2M9 7a2 2 0 012-2h2a2 2 0 012 2m0 10V7m0 10a2 2 0 002 2h2a2 2 0 002-2V7a2 2 0 00-2-2h-2a2 2 0 00-2 2" />
                             </svg>
                             <span className="font-medium">{sheet.name}</span>
@@ -521,27 +430,6 @@ export default function GoogleDriveIndexer({
       {files.length > 0 && (
         <div className="flex justify-end gap-3 mb-6">
           <button
-            onClick={generateEmbeddingsForDocuments}
-            disabled={generatingEmbeddings}
-            className="bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-400 text-white px-4 py-2 rounded-md text-sm font-medium transition-colors"
-          >
-            {generatingEmbeddings ? 'Generating...' : 'Generate Embeddings'}
-            {embeddingStats && (
-              <span className="ml-2 text-xs opacity-80">
-                ({embeddingStats.embeddedDocuments}/{embeddingStats.totalDocuments})
-              </span>
-            )}
-          </button>
-          
-          <button
-            onClick={generateSummariesForFiles}
-            disabled={generatingSummaries}
-            className="bg-purple-600 hover:bg-purple-700 disabled:bg-gray-400 text-white px-4 py-2 rounded-md text-sm font-medium transition-colors"
-          >
-            {generatingSummaries ? 'Generating...' : 'Generate AI Summaries'}
-          </button>
-          
-          <button
             onClick={clearAllImports}
             disabled={clearingAll}
             className="bg-red-600 hover:bg-red-700 disabled:bg-gray-400 text-white px-4 py-2 rounded-md text-sm font-medium transition-colors"
@@ -561,31 +449,22 @@ export default function GoogleDriveIndexer({
 
       {/* Index Folder Form */}
       <div className="mb-6">
-        <div className="flex gap-2 mb-2">
+        <div className="flex gap-2">
           <input
             type="text"
             placeholder="Google Drive folder URL"
             value={folderUrl}
             onChange={(e) => setFolderUrl(e.target.value)}
-            className="flex-1 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+            className="flex-1 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
           />
           <button
             onClick={indexDriveFolder}
             disabled={!folderUrl || indexing}
-            className="bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 text-white px-4 py-2 rounded-md transition-colors"
+            className="bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 text-white px-4 py-2 rounded-md transition-colors font-medium"
           >
             {indexing ? 'Indexing...' : 'Index Folder'}
           </button>
         </div>
-        <label className="flex items-center gap-2 text-sm text-gray-600">
-          <input
-            type="checkbox"
-            checked={generateSummariesOnIndex}
-            onChange={(e) => setGenerateSummariesOnIndex(e.target.checked)}
-            className="rounded border-gray-300"
-          />
-          Generate AI summaries during indexing (uses OpenAI API)
-        </label>
       </div>
 
       {/* File Browser */}
@@ -593,25 +472,25 @@ export default function GoogleDriveIndexer({
         <div>
           {/* File Type Legend */}
           <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4 mb-4">
-            <h4 className="text-sm font-medium text-gray-900 mb-3">File Type Support</h4>
+            <h4 className="text-sm font-medium text-gray-900 mb-3">File Type Status</h4>
             <div className="flex flex-wrap gap-4 text-sm">
               <div className="flex items-center gap-2">
-                <div className="w-3 h-3 rounded-sm bg-green-500"></div>
-                <span>Spreadsheets (Supported)</span>
+                <div className="w-3 h-3 rounded-sm bg-emerald-600"></div>
+                <span>Spreadsheets (Indexed)</span>
               </div>
               <div className="flex items-center gap-2">
-                <div className="w-3 h-3 rounded-sm bg-blue-500"></div>
-                <span>Documents (Supported)</span>
+                <div className="w-3 h-3 rounded-sm bg-blue-600"></div>
+                <span>Documents (Indexed)</span>
               </div>
               <div className="flex items-center gap-2">
                 <div className="w-3 h-3 rounded-sm bg-gray-500"></div>
-                <span>Other Files (Not Supported Yet)</span>
+                <span>Other Files (Not Indexed)</span>
               </div>
             </div>
           </div>
           
           {/* Folder Tree */}
-          <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
+          <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4 group">
             <h3 className="font-medium text-gray-900 mb-4">Imported Folders</h3>
             {folderTree.map(node => renderFolderNode(node))}
             
@@ -626,7 +505,7 @@ export default function GoogleDriveIndexer({
                   return (
                     <div
                       key={file.id}
-                      className="flex items-center gap-2 p-2 hover:bg-gray-50 rounded"
+                      className="flex items-center gap-2 py-1.5 px-2 hover:bg-gray-50 rounded-md transition-colors"
                     >
                       <div
                         className="w-3 h-3 rounded-sm"
@@ -634,7 +513,7 @@ export default function GoogleDriveIndexer({
                       />
                       <span className="text-sm text-gray-700">{file.name}</span>
                       {group.key === 'unsupported' && (
-                        <span className="text-xs text-gray-500 italic ml-2">(not supported yet)</span>
+                        <span className="text-xs text-gray-500 italic ml-2">(not indexed)</span>
                       )}
                       {summary?.summary && (
                         <span className="text-xs text-gray-600 italic ml-2" title={summary.summary}>

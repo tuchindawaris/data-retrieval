@@ -65,27 +65,27 @@ export default function GoogleDriveSearch({ files, embeddingStats }: GoogleDrive
                   : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
               }`}
             >
-              🔍 Search Documents
+              Search Documents
             </button>
             <button
               onClick={() => setSearchType('spreadsheets')}
               className={`px-6 py-3 text-sm font-medium border-b-2 transition-colors ${
                 searchType === 'spreadsheets'
-                  ? 'border-green-500 text-green-600'
+                  ? 'border-emerald-500 text-emerald-600'
                   : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
               }`}
             >
-              📊 Search Spreadsheets
+              Search Spreadsheets
             </button>
             <button
               onClick={() => setSearchType('files')}
               className={`px-6 py-3 text-sm font-medium border-b-2 transition-colors ${
                 searchType === 'files'
-                  ? 'border-gray-500 text-gray-700'
+                  ? 'border-gray-700 text-gray-700'
                   : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
               }`}
             >
-              📁 Search Other Files
+              Search Other Files
             </button>
           </nav>
         </div>
@@ -116,8 +116,8 @@ export default function GoogleDriveSearch({ files, embeddingStats }: GoogleDrive
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
             </svg>
             <h3 className="text-lg font-medium text-gray-900 mb-2">No Document Embeddings Yet</h3>
-            <p className="text-gray-500 mb-4">Generate embeddings for your documents to enable semantic search</p>
-            <p className="text-sm text-gray-400">Go back to file management to generate embeddings</p>
+            <p className="text-gray-500 mb-4">Documents are automatically indexed when you add folders</p>
+            <p className="text-sm text-gray-400">Go back to file management to index documents</p>
           </div>
         )
       )}

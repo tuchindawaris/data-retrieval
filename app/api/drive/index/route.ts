@@ -4,6 +4,10 @@ import { cookies } from 'next/headers'
 import { listFolderContents, getFileMetadata } from '@/lib/google-drive'
 import { processSpreadsheet } from '@/lib/spreadsheet-processor'
 import { getOAuth2Client } from '@/lib/google-drive'
+import { generateSummaries } from '@/lib/summary-generator'
+import { processDocumentForEmbedding } from '@/lib/document-processor-enhanced'
+import { generateEmbeddings } from '@/lib/embedding-generator'
+import { extractDocumentText } from '@/lib/document-processor'
 
 // Check if file is a spreadsheet
 function isSpreadsheet(mimeType: string, fileName: string): boolean {
@@ -141,26 +145,204 @@ async function refreshTokenIfNeeded(tokens: any, cookieStore: any) {
   return tokens.access_token
 }
 
+// Generate summaries for indexed files
+async function generateSummariesForFiles(
+  supabase: any,
+  sourceId: string,
+  fileRecords: any[],
+  accessToken: string
+) {
+  const filesToSummarize = []
+  
+  for (const file of fileRecords) {
+    // Skip folders
+    if (file.metadata?.isFolder) continue
+    
+    // Skip files with errors
+    if (file.metadata?.spreadsheetError) continue
+    
+    let content = null
+    
+    // For spreadsheets, use metadata
+    if (file.metadata?.isSpreadsheet && file.metadata?.sheets) {
+      content = {
+        sheets: file.metadata.sheets
+      }
+    }
+    // For documents, extract text
+    else if (file.metadata?.isDocument) {
+      try {
+        const text = await extractDocumentText(
+          accessToken,
+          file.file_id,
+          file.name,
+          file.mime_type
+        )
+        if (text && !text.startsWith('[Unable to extract')) {
+          content = text
+        }
+      } catch (error: any) {
+        console.error(`Error extracting text from ${file.name}:`, error.message)
+      }
+    }
+    
+    if (content) {
+      filesToSummarize.push({
+        fileId: file.file_id,
+        fileName: file.name,
+        mimeType: file.mime_type,
+        content
+      })
+    }
+  }
+  
+  if (filesToSummarize.length === 0) {
+    return { generated: 0, failed: 0 }
+  }
+  
+  // Generate summaries in batches
+  const batchSize = 10
+  const allSummaries = []
+  const allFailures = []
+  
+  for (let i = 0; i < filesToSummarize.length; i += batchSize) {
+    const batch = filesToSummarize.slice(i, i + batchSize)
+    
+    try {
+      const result = await generateSummaries(batch)
+      allSummaries.push(...result.summaries)
+      allFailures.push(...result.failures)
+    } catch (error: any) {
+      console.error(`Error in summary batch:`, error.message)
+    }
+  }
+  
+  // Save summaries to database
+  let savedCount = 0
+  
+  for (const summary of allSummaries) {
+    const { error } = await supabase
+      .from('file_summaries')
+      .insert({
+        source_id: sourceId,
+        file_id: summary.fileId,
+        summary: summary.summary,
+        sheet_summaries: summary.sheetSummaries || null,
+        summary_tokens: Math.ceil(summary.summary.length / 4),
+        generated_at: new Date().toISOString()
+      })
+    
+    if (!error) {
+      savedCount++
+    }
+  }
+  
+  return { generated: savedCount, failed: allFailures.length }
+}
+
+// Generate embeddings for documents
+async function generateEmbeddingsForDocuments(
+  supabase: any,
+  sourceId: string,
+  fileRecords: any[],
+  accessToken: string
+) {
+  const documentsToProcess = fileRecords.filter(file => 
+    file.metadata?.isDocument && !file.metadata?.isFolder
+  )
+  
+  if (documentsToProcess.length === 0) {
+    return { embedded: 0, failed: 0 }
+  }
+  
+  const documentsWithChunks = []
+  
+  for (const doc of documentsToProcess) {
+    try {
+      const driveWebLink = `https://drive.google.com/file/d/${doc.file_id}/view`
+      
+      const result = await processDocumentForEmbedding(
+        accessToken,
+        doc.file_id,
+        doc.name,
+        doc.mime_type,
+        driveWebLink,
+        doc.metadata?.modifiedTime
+      )
+      
+      if (result) {
+        documentsWithChunks.push({
+          fileId: doc.file_id,
+          chunks: result.chunks
+        })
+        
+        // Save citation info
+        await supabase
+          .from('document_citations')
+          .upsert({
+            file_id: doc.file_id,
+            source_id: sourceId,
+            drive_web_link: driveWebLink,
+            document_title: doc.name,
+            last_modified: doc.metadata?.modifiedTime,
+          })
+      }
+    } catch (error: any) {
+      console.error(`Error processing ${doc.name}:`, error.message)
+    }
+  }
+  
+  if (documentsWithChunks.length === 0) {
+    return { embedded: 0, failed: 0 }
+  }
+  
+  // Generate embeddings
+  const embeddingResult = await generateEmbeddings(documentsWithChunks)
+  
+  // Save embeddings to database
+  let savedChunks = 0
+  
+  for (const result of embeddingResult.results) {
+    const embeddingRecords = result.embeddings.map(emb => ({
+      file_id: result.fileId,
+      source_id: sourceId,
+      chunk_index: emb.chunk_index,
+      chunk_text: emb.chunk_text,
+      embedding: emb.embedding,
+      metadata: emb.metadata
+    }))
+    
+    // Insert in batches of 100
+    for (let i = 0; i < embeddingRecords.length; i += 100) {
+      const batch = embeddingRecords.slice(i, i + 100)
+      const { error } = await supabase
+        .from('document_embeddings')
+        .insert(batch)
+      
+      if (!error) {
+        savedChunks += batch.length
+      }
+    }
+  }
+  
+  return { 
+    embedded: embeddingResult.results.length, 
+    failed: embeddingResult.errors.length 
+  }
+}
+
 export async function POST(request: NextRequest) {
+  const startTime = Date.now()
   console.log('\n=== DRIVE INDEX REQUEST ===')
   
   try {
     // Create Supabase client with the request/response
     const supabase = createRouteHandlerClient({ cookies })
     
-    // Get the session - this should work with the middleware properly setting cookies
+    // Get the session
     const { data: { session }, error: sessionError } = await supabase.auth.getSession()
     
-    if (sessionError) {
-      console.error('Session error:', sessionError)
-      return NextResponse.json({ 
-        error: 'Authentication error',
-        details: sessionError.message 
-      }, { status: 401 })
-    }
-    
-    if (!session) {
-      console.error('No session found')
+    if (sessionError || !session) {
       return NextResponse.json({ 
         error: 'Not authenticated - please log in' 
       }, { status: 401 })
@@ -168,15 +350,14 @@ export async function POST(request: NextRequest) {
     
     console.log(`Authenticated user: ${session.user.email}`)
     
-    const { folderId, generateSummaries = false } = await request.json()
-    console.log(`Folder ID: ${folderId}, Generate summaries: ${generateSummaries}`)
+    const { folderId } = await request.json()
+    console.log(`Folder ID: ${folderId}`)
     
     // Get Google tokens from cookies
     const cookieStore = cookies()
     const tokensCookie = cookieStore.get('google_tokens')
     
     if (!tokensCookie) {
-      console.error('No Google tokens cookie found')
       return NextResponse.json({ 
         error: 'Not authenticated with Google Drive - please link Google Drive first' 
       }, { status: 401 })
@@ -185,30 +366,17 @@ export async function POST(request: NextRequest) {
     let tokens
     try {
       tokens = JSON.parse(tokensCookie.value)
-      console.log('Google tokens found, checking expiry...')
     } catch (e) {
-      console.error('Failed to parse Google tokens:', e)
       return NextResponse.json({ 
         error: 'Invalid Google tokens - please re-link Google Drive' 
       }, { status: 401 })
     }
     
     // Refresh token if needed
-    let accessToken
-    try {
-      accessToken = await refreshTokenIfNeeded(tokens, cookieStore)
-      console.log('Google access token is valid')
-    } catch (error: any) {
-      console.error('Token refresh failed:', error)
-      return NextResponse.json({ 
-        error: 'Google token refresh failed - please re-link Google Drive', 
-        details: error.message 
-      }, { status: 401 })
-    }
+    const accessToken = await refreshTokenIfNeeded(tokens, cookieStore)
     
     // Get or create Drive source for the user
-    console.log('Getting Drive source for user...')
-    const { data: source, error: sourceError } = await supabase
+    const { data: source } = await supabase
       .from('data_sources')
       .select('*')
       .eq('user_id', session.user.id)
@@ -218,7 +386,6 @@ export async function POST(request: NextRequest) {
     let sourceId = source?.id
     
     if (!sourceId) {
-      console.log('Creating new Drive source...')
       const { data: newSource, error } = await supabase
         .from('data_sources')
         .insert({ 
@@ -230,7 +397,6 @@ export async function POST(request: NextRequest) {
         .single()
       
       if (error) {
-        console.error('Error creating Drive source:', error)
         return NextResponse.json({ 
           error: 'Failed to create Drive source', 
           details: error.message 
@@ -238,9 +404,6 @@ export async function POST(request: NextRequest) {
       }
       
       sourceId = newSource?.id
-      console.log('Created new Drive source:', sourceId)
-    } else {
-      console.log('Using existing Drive source:', sourceId)
     }
     
     // Check if folder already indexed
@@ -252,10 +415,10 @@ export async function POST(request: NextRequest) {
       .eq('metadata->>isFolder', 'true')
       .limit(1)
     
-    if (existingFiles && existingFiles.length > 0) {
-      console.log('Folder already indexed, performing resync...')
-      // Folder exists - do a resync
-      // First, delete all existing files for this folder
+    const resynced = existingFiles && existingFiles.length > 0
+    
+    if (resynced) {
+      // Delete all existing files for this folder
       const { data: allFiles } = await supabase
         .from('file_metadata')
         .select('*')
@@ -269,7 +432,6 @@ export async function POST(request: NextRequest) {
       ) || []
       
       if (filesToDelete.length > 0) {
-        console.log(`Deleting ${filesToDelete.length} existing files...`)
         const idsToDelete = filesToDelete.map(f => f.id)
         await supabase
           .from('file_metadata')
@@ -288,7 +450,6 @@ export async function POST(request: NextRequest) {
     )
     
     // Get folder metadata for the root folder
-    console.log('Getting root folder metadata...')
     const folderMeta = await getFileMetadata(accessToken, folderId)
     
     // Add the root folder
@@ -315,7 +476,6 @@ export async function POST(request: NextRequest) {
         .upsert(fileRecords, { onConflict: 'source_id,file_id' })
       
       if (upsertError) {
-        console.error('Error saving files to database:', upsertError)
         return NextResponse.json({ 
           error: 'Failed to save indexed files', 
           details: upsertError.message 
@@ -323,52 +483,43 @@ export async function POST(request: NextRequest) {
       }
     }
     
-    // Generate summaries if requested
-    let summaryCount = 0
-    if (generateSummaries) {
-      console.log('Generating summaries...')
-      try {
-        const baseUrl = request.nextUrl.origin
-        const summaryResponse = await fetch(
-          `${baseUrl}/api/drive/generate-summaries`,
-          {
-            method: 'POST',
-            headers: { 
-              'Content-Type': 'application/json',
-              'Cookie': request.headers.get('cookie') || ''
-            },
-            body: JSON.stringify({ folderId })
-          }
-        )
-        
-        if (summaryResponse.ok) {
-          const summaryData = await summaryResponse.json()
-          summaryCount = summaryData.updated || 0
-          console.log(`Generated ${summaryCount} summaries`)
-        } else {
-          console.error('Summary generation failed:', await summaryResponse.text())
-        }
-      } catch (error) {
-        console.error('Error generating summaries:', error)
-      }
-    }
+    // Automatically generate summaries
+    console.log('Generating summaries...')
+    const summaryResult = await generateSummariesForFiles(
+      supabase,
+      sourceId,
+      fileRecords,
+      accessToken
+    )
     
-    const resynced = existingFiles && existingFiles.length > 0
+    // Automatically generate embeddings for documents
+    console.log('Generating embeddings...')
+    const embeddingResult = await generateEmbeddingsForDocuments(
+      supabase,
+      sourceId,
+      fileRecords,
+      accessToken
+    )
     
+    const duration = Date.now() - startTime
     console.log('=== INDEX COMPLETE ===')
-    console.log(`Success! Indexed ${fileRecords.length} files, generated ${summaryCount} summaries`)
+    console.log(`Duration: ${duration}ms`)
+    console.log(`Files indexed: ${fileRecords.length}`)
+    console.log(`Summaries generated: ${summaryResult.generated}`)
+    console.log(`Embeddings generated: ${embeddingResult.embedded}`)
     
     return NextResponse.json({ 
       success: true,
       resynced,
       indexed: fileRecords.length,
-      summariesGenerated: summaryCount
+      summariesGenerated: summaryResult.generated,
+      embeddingsGenerated: embeddingResult.embedded,
+      duration
     })
     
   } catch (error: any) {
     console.error('=== INDEX ERROR ===')
     console.error('Indexing error:', error)
-    console.error('Stack:', error.stack)
     return NextResponse.json(
       { error: 'Failed to index folder', details: error.message }, 
       { status: 500 }

@@ -107,7 +107,7 @@ export default function SpreadsheetSearch({
               onChange={(e) => setQuery(e.target.value)}
               onKeyPress={handleKeyPress}
               placeholder="Search your spreadsheets... (e.g., 'payments by vendor name', 'total sales last month', 'find all invoices over $1000')"
-              className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500 resize-none"
+              className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent resize-none"
               rows={2}
             />
           </div>
@@ -115,7 +115,7 @@ export default function SpreadsheetSearch({
             <button
               onClick={handleSearch}
               disabled={loading || !query.trim()}
-              className="px-6 py-3 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors"
+              className="px-6 py-3 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors font-medium"
             >
               {loading ? (
                 <div className="flex items-center gap-2">
@@ -131,9 +131,9 @@ export default function SpreadsheetSearch({
             </button>
             <button
               onClick={() => setShowSettings(!showSettings)}
-              className="px-4 py-2 text-sm text-gray-600 hover:text-gray-800 border border-gray-300 rounded-lg hover:bg-gray-50"
+              className="px-4 py-2 text-sm text-gray-600 hover:text-gray-800 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
             >
-              ⚙️ Settings
+              Settings
             </button>
           </div>
         </div>
@@ -245,9 +245,9 @@ export default function SpreadsheetSearch({
               const csvContent = exportAllToCSV(results)
               downloadCSV(csvContent, `spreadsheet-search-${Date.now()}.csv`)
             }}
-            className="text-green-600 hover:text-green-700"
+            className="text-emerald-600 hover:text-emerald-700 transition-colors"
           >
-            📥 Export All Results
+            Export All Results
           </button>
         </div>
       )}
