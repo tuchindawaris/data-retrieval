@@ -1,14 +1,16 @@
+// components/FilenameSearch.tsx
+
 'use client'
 
 import { useState } from 'react'
-import { SearchResult } from '@/app/api/search/semantic/route'
-import CitationCard from './CitationCard'
+import { FilenameSearchResult } from '@/app/api/search/filename/route'
+import FilenameResultCard from './FilenameResultCard'
 
-interface SemanticSearchProps {
+interface FilenameSearchProps {
   query: string
   setQuery: (query: string) => void
-  results: SearchResult[]
-  setResults: (results: SearchResult[]) => void
+  results: FilenameSearchResult[]
+  setResults: (results: FilenameSearchResult[]) => void
   loading: boolean
   setLoading: (loading: boolean) => void
   error: string | null
@@ -17,11 +19,11 @@ interface SemanticSearchProps {
   setSearchDuration: (duration: number | null) => void
   matchThreshold: number
   setMatchThreshold: (threshold: number) => void
-  matchCount: number
-  setMatchCount: (count: number) => void
+  maxResults: number
+  setMaxResults: (max: number) => void
 }
 
-export default function SemanticSearch({
+export default function FilenameSearch({
   query,
   setQuery,
   results,
@@ -34,9 +36,9 @@ export default function SemanticSearch({
   setSearchDuration,
   matchThreshold,
   setMatchThreshold,
-  matchCount,
-  setMatchCount
-}: SemanticSearchProps) {
+  maxResults,
+  setMaxResults
+}: FilenameSearchProps) {
   const [showSettings, setShowSettings] = useState(false)
 
   const handleSearch = async () => {
@@ -47,14 +49,14 @@ export default function SemanticSearch({
     setResults([])
     
     try {
-      const response = await fetch('/api/search/semantic', {
+      const response = await fetch('/api/search/filename', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
         body: JSON.stringify({ 
           query,
           matchThreshold,
-          matchCount
+          maxResults
         })
       })
       
@@ -81,8 +83,10 @@ export default function SemanticSearch({
     }
   }
 
+  const totalSize = results.reduce((sum, r) => sum + r.size, 0)
+
   return (
-    <div className="max-w-4xl mx-auto">
+    <div className="max-w-5xl mx-auto">
       {/* Search Bar */}
       <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4 mb-6">
         <div className="flex gap-2 mb-3">
@@ -91,8 +95,8 @@ export default function SemanticSearch({
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               onKeyPress={handleKeyPress}
-              placeholder="Ask a question about your documents..."
-              className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none"
+              placeholder="Search for files by name... (e.g., 'presentation', 'budget report', 'design mockup')"
+              className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-gray-500 focus:border-transparent resize-none"
               rows={2}
             />
           </div>
@@ -100,7 +104,7 @@ export default function SemanticSearch({
             <button
               onClick={handleSearch}
               disabled={loading || !query.trim()}
-              className="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors font-medium"
+              className="px-6 py-3 bg-gray-700 text-white rounded-lg hover:bg-gray-800 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors font-medium"
             >
               {loading ? 'Searching...' : 'Search'}
             </button>
@@ -118,12 +122,12 @@ export default function SemanticSearch({
           <div className="border-t pt-3 mt-3 grid grid-cols-2 gap-4">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">
-                Similarity Threshold
+                Relevance Threshold
               </label>
               <div className="flex items-center gap-2">
                 <input
                   type="range"
-                  min="0.1"
+                  min="0.3"
                   max="0.9"
                   step="0.05"
                   value={matchThreshold}
@@ -138,14 +142,14 @@ export default function SemanticSearch({
                 Max Results
               </label>
               <select
-                value={matchCount}
-                onChange={(e) => setMatchCount(parseInt(e.target.value))}
+                value={maxResults}
+                onChange={(e) => setMaxResults(parseInt(e.target.value))}
                 className="w-full px-3 py-1 border border-gray-300 rounded-md text-sm"
               >
-                <option value={5}>5</option>
                 <option value={10}>10</option>
                 <option value={20}>20</option>
                 <option value={50}>50</option>
+                <option value={100}>100</option>
               </select>
             </div>
           </div>
@@ -159,10 +163,12 @@ export default function SemanticSearch({
         </div>
       )}
 
-      {/* Search Duration */}
+      {/* Search Summary */}
       {searchDuration !== null && results.length > 0 && (
-        <div className="text-sm text-gray-600 mb-4">
-          Found {results.length} results in {searchDuration}ms
+        <div className="text-sm text-gray-600 mb-4 flex items-center justify-between">
+          <span>
+            Found {results.length} files ({(totalSize / (1024 * 1024)).toFixed(1)} MB total) in {searchDuration}ms
+          </span>
         </div>
       )}
 
@@ -170,7 +176,11 @@ export default function SemanticSearch({
       {results.length > 0 && (
         <div className="space-y-4">
           {results.map((result, index) => (
-            <CitationCard key={`${result.fileId}-${result.chunkIndex}`} result={result} rank={index + 1} />
+            <FilenameResultCard 
+              key={result.fileId} 
+              result={result} 
+              rank={index + 1} 
+            />
           ))}
         </div>
       )}
@@ -181,8 +191,8 @@ export default function SemanticSearch({
           <svg className="w-16 h-16 mx-auto text-gray-300 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.172 16.172a4 4 0 015.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
           </svg>
-          <p className="text-lg font-medium mb-2">No results found</p>
-          <p className="text-sm">Try adjusting your search query or lowering the similarity threshold</p>
+          <p className="text-lg font-medium mb-2">No files found</p>
+          <p className="text-sm">Try adjusting your search query or lowering the relevance threshold</p>
         </div>
       )}
 
@@ -190,10 +200,17 @@ export default function SemanticSearch({
       {!loading && !query && results.length === 0 && (
         <div className="text-center py-12 text-gray-500">
           <svg className="w-16 h-16 mx-auto text-gray-300 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z" />
           </svg>
-          <p className="text-lg font-medium mb-2">Search your documents</p>
-          <p className="text-sm">Ask questions and find relevant information across all your files</p>
+          <p className="text-lg font-medium mb-2">Search unsupported files</p>
+          <p className="text-sm">Find images, videos, PDFs, and other files by their names</p>
+          <div className="mt-4 text-xs text-gray-400">
+            <p>Currently searching file types that are not:</p>
+            <ul className="mt-2 space-y-1">
+              <li>• Spreadsheets (use Spreadsheet Search)</li>
+              <li>• Documents (use Document Search)</li>
+            </ul>
+          </div>
         </div>
       )}
     </div>

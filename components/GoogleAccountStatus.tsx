@@ -73,7 +73,7 @@ export default function GoogleAccountStatus() {
   }
 
   return (
-    <div className={`border-b ${googleAccount?.authenticated ? 'bg-green-50 border-green-200' : 'bg-yellow-50 border-yellow-200'}`}>
+    <div className={`border-b ${googleAccount?.authenticated ? 'bg-green-50 border-green-200' : 'bg-amber-50 border-amber-200'}`}>
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-2">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2 text-sm">
@@ -87,15 +87,15 @@ export default function GoogleAccountStatus() {
                 </svg>
                 <span className="text-green-700 font-medium">Google Drive connected</span>
                 {googleAccount.email && (
-                  <span className="text-gray-600">• {googleAccount.email}</span>
+                  <span className="text-gray-600 text-xs">({googleAccount.email})</span>
                 )}
               </>
             ) : (
               <>
-                <svg className="w-4 h-4 text-yellow-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <svg className="w-4 h-4 text-amber-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
                 </svg>
-                <span className="text-yellow-700 font-medium">Google Drive not connected</span>
+                <span className="text-amber-700 font-medium">Google Drive not connected</span>
               </>
             )}
           </div>
@@ -104,14 +104,14 @@ export default function GoogleAccountStatus() {
             <button
               onClick={handleDisconnect}
               disabled={disconnecting}
-              className="text-xs text-red-600 hover:text-red-700 font-medium disabled:opacity-50"
+              className="text-xs text-red-600 hover:text-red-700 font-medium disabled:opacity-50 transition-colors"
             >
               {disconnecting ? 'Disconnecting...' : 'Disconnect'}
             </button>
           ) : (
             <button
               onClick={handleConnect}
-              className="text-xs bg-green-600 hover:bg-green-700 text-white px-3 py-1 rounded-md font-medium"
+              className="text-xs bg-green-600 hover:bg-green-700 text-white px-3 py-1 rounded-md font-medium transition-colors"
             >
               Connect Google Drive
             </button>
