@@ -137,3 +137,65 @@ export interface DatabaseStatistics {
   nullableColumns: number
   nonNullableColumns: number
 }
+
+// Export the FolderNode type so it can be shared between components
+export interface FolderNode {
+  id: string
+  name: string
+  path: string
+  files: FileMetadata[]
+  subfolders: FolderNode[]
+}
+
+// You may also want to export these file group constants
+export const FILE_GROUPS = {
+  spreadsheet: {
+    color: '#10b981', // green
+    label: 'Spreadsheets',
+    extensions: ['xlsx', 'xls', 'csv', 'ods'],
+    mimeTypes: [
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'application/vnd.ms-excel',
+      'text/csv',
+      'application/vnd.google-apps.spreadsheet',
+      'application/vnd.oasis.opendocument.spreadsheet'
+    ]
+  },
+  document: {
+    color: '#3b82f6', // blue
+    label: 'Documents',
+    extensions: ['txt', 'md', 'doc', 'docx', 'rtf', 'odt'],
+    mimeTypes: [
+      'text/plain',
+      'text/markdown',
+      'application/msword',
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      'application/vnd.google-apps.document',
+      'application/rtf',
+      'application/vnd.oasis.opendocument.text'
+    ]
+  },
+  unsupported: {
+    color: '#6b7280', // gray
+    label: 'Not Supported Yet',
+    extensions: [],
+    mimeTypes: []
+  }
+} as const
+
+// Helper function to determine file group
+export function getFileGroup(mimeType: string, fileName: string) {
+  const extension = fileName.split('.').pop()?.toLowerCase() || ''
+  
+  if (FILE_GROUPS.spreadsheet.mimeTypes.includes(mimeType) || 
+      FILE_GROUPS.spreadsheet.extensions.includes(extension)) {
+    return { key: 'spreadsheet' as const, ...FILE_GROUPS.spreadsheet }
+  }
+  
+  if (FILE_GROUPS.document.mimeTypes.includes(mimeType) || 
+      FILE_GROUPS.document.extensions.includes(extension)) {
+    return { key: 'document' as const, ...FILE_GROUPS.document }
+  }
+  
+  return { key: 'unsupported' as const, ...FILE_GROUPS.unsupported }
+}

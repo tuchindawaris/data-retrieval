@@ -43,16 +43,3 @@ export async function getUserDriveSource(userId?: string) {
   
   return source
 }
-
-// DEPRECATED: These functions are no longer used
-// Google tokens are now managed via cookies in the API routes
-
-export async function getUserGoogleTokens() {
-  console.warn('getUserGoogleTokens is deprecated - tokens are now stored in cookies')
-  return null
-}
-
-export async function saveUserGoogleTokens(userId: string, tokens: any) {
-  console.warn('saveUserGoogleTokens is deprecated - tokens are now stored in cookies')
-  // No-op - tokens are saved in cookies by the callback route
-}

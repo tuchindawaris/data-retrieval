@@ -39,16 +39,7 @@ export default function Navbar() {
             >
               Knowledge Map
             </Link>
-            <Link
-              href="/knowledgemapschema"
-              className={`text-sm font-medium transition-colors ${
-                pathname === '/knowledgemapschema' 
-                  ? 'text-blue-600' 
-                  : 'text-gray-700 hover:text-gray-900'
-              }`}
-            >
-              Schema Viewer
-            </Link>
+            
           </nav>
 
           {/* User Menu */}
