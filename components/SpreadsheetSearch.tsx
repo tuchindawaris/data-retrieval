@@ -58,7 +58,7 @@ export default function SpreadsheetSearch({
     setSearchIntent(null)
     
     try {
-      const response = await fetch('/api/search/spreadsheet', {
+      const response = await fetch('/api/search/spreadsheet-enhanced', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
